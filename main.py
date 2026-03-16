@@ -69,7 +69,13 @@ STATE = {
         "ultimo_score_gol": -1,
         "ultimo_score_corner": -1,
         "ultima_hora_envio": None,
-},
+    },
+    "estadisticas": [],
+    "resumen_control": {
+        "ultimo_resumen_dia": None,
+        "ultimo_resumen_semana": None,
+    },
+}
 
 # ==============================
 # PERSISTENCIA
@@ -537,9 +543,9 @@ def detectar_tipo_pick_por_codigo(datos):
     partes = obtener_bloques_codigo(datos)
     if len(partes) >= 2:
         mercado = partes[1].upper()
-        if mercado == "CORNER":
+        if "CORNER" in mercado:
             return "corner"
-        if mercado == "GOAL":
+        if "GOAL" in mercado or "GOL" in mercado:
             return "gol"
     return None
 
