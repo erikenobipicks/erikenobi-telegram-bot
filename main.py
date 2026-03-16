@@ -30,7 +30,7 @@ CANAL_GOLES_ID = -1003818905455
 CANAL_GENERAL_ID = -1003876204382
 CANAL_FREE_ID = -1002973101273
 
-ENVIAR_A_GENERAL = False
+ENVIAR_A_GENERAL = True
 
 # Cupos FREE por día
 MAX_FREE_GOLES = 2
@@ -1162,14 +1162,13 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE):
     canales_destino = []
 
     if tipo_pick == "corner":
-        canales_destino = [CANAL_PRUEBAS_ID, CANAL_CORNERS_ID]
-        if ENVIAR_A_GENERAL:
-            canales_destino.append(CANAL_GENERAL_ID)
+        canales_destino.append(CANAL_CORNERS_ID)
 
     elif tipo_pick == "gol":
-        canales_destino = [CANAL_PRUEBAS_ID, CANAL_GOLES_ID]
-        if ENVIAR_A_GENERAL:
-            canales_destino.append(CANAL_GENERAL_ID)
+          canales_destino.append(CANAL_GOLES_ID)
+
+    if ENVIAR_A_GENERAL:
+          canales_destino.append(CANAL_GENERAL_ID)
 
     mensaje_limpio = construir_mensaje_base(datos, tipo_pick)
 
