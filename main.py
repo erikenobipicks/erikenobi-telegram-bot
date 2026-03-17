@@ -21,13 +21,13 @@ import os
 TOKEN = os.getenv("BOT_TOKEN")
 
 # ORIGEN ACTUAL = PREMIUM
-CANAL_ORIGEN_ID = -1002037791209
+CANAL_ORIGEN_ID = -1003876204382
 
 # DESTINOS
 CANAL_PRUEBAS_ID = -1002037791209
 CANAL_CORNERS_ID = -1003895151594
 CANAL_GOLES_ID = -1003818905455
-CANAL_GENERAL_ID = -1003876204382
+CANAL_GENERAL_ID = -1002037791209
 CANAL_FREE_ID = -1002973101273
 
 ENVIAR_A_GENERAL = True
@@ -43,11 +43,7 @@ FREE_HORA_INICIO = 10
 FREE_HORA_FIN = 22
 
 # Canal/grupo donde quieres publicar los resúmenes automáticos
-CANALES_RESUMEN = [
-    CANAL_FREE_ID,
-    CANAL_GOLES_ID,
-    CANAL_CORNERS_ID,
-]
+CANAL_RESUMEN_ID = CANAL_PRUEBAS_ID
 
 # Archivo para persistencia simple
 STATE_FILE = "bot_state.json"
@@ -99,29 +95,8 @@ def load_state():
     global STATE
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
-            cargado = json.load(f)
-
-        STATE["mensajes_publicados"] = cargado.get("mensajes_publicados", {})
-        STATE["estadisticas"] = cargado.get("estadisticas", [])
-        STATE["resumen_control"] = cargado.get(
-            "resumen_control",
-            {
-                "ultimo_resumen_dia": None,
-                "ultimo_resumen_semana": None,
-            },
-        )
-
-        fs = cargado.get("free_state", {})
-        STATE["free_state"] = {
-            "fecha": fs.get("fecha"),
-            "goles_enviados": fs.get("goles_enviados", 0),
-            "corners_enviados": fs.get("corners_enviados", 0),
-            "ultimo_score_gol": fs.get("ultimo_score_gol", -1),
-            "ultimo_score_corner": fs.get("ultimo_score_corner", -1),
-            "ultima_hora_envio": fs.get("ultima_hora_envio", None),
-        }
-
-        print("✅ Estado cargado desde disco")
+            STATE = json.load(f)
+            print("✅ Estado cargado desde disco")
     except FileNotFoundError:
         print("ℹ️ No existe estado previo, se crea uno nuevo")
     except Exception as e:
@@ -647,15 +622,10 @@ def calcular_entrada_sugerida(datos: dict, tipo_pick: str):
         sufijo = "HT" if periodo == "HT" else "FT" if periodo == "FT" else "2ª parte" if periodo == "2H" else ""
 
         if modo == "ASIAN0.5-1":
-            linea_asian = f"{total_goles + 0.5}/{total_goles + 1}"
-            texto = f"🎯 Entrada sugerida: asiática {linea_asian} goles {sufijo}"
-            if condicion:
-                texto += f"\n📌 Condición: {condicion}"
-            return texto
+            return f"🎯 Entrada sugerida: asiática 0.5/1 goles {sufijo}"
 
         if modo == "ASIAN+1":
-            linea_asian = f"{total_goles + 0.5}/{total_goles + 1}"
-            texto = f"🎯 Entrada sugerida: asiática {linea_asian} goles {sufijo}"
+            texto = f"🎯 Entrada sugerida: asiática +1 goles {sufijo}"
             if condicion:
                 texto += f"\n📌 Condición: {condicion}"
             return texto
@@ -682,8 +652,7 @@ def calcular_entrada_sugerida(datos: dict, tipo_pick: str):
             return texto
 
         if fase == "LIVE" and modo == "ASIAN" and linea == "+1":
-            linea_asian = f"{total_goles + 0.5}/{total_goles + 1}"
-            texto = f"🎯 Entrada sugerida: asiática {linea_asian} goles {sufijo}"
+            texto = f"🎯 Entrada sugerida: asiática +1 goles {sufijo}"
             if condicion:
                 texto += f"\n📌 Condición: {condicion}"
             return texto
@@ -835,16 +804,12 @@ def obtener_resumen_linea(datos: dict, tipo_pick: str) -> str:
             return f"+{total_goles + 0.5}"
 
         if modo == "ASIAN0.5-1":
-            linea_asian = f"{total_goles + 0.5}/{total_goles + 1}"
-            if condicion:
-                return f"Asian {linea_asian} · {condicion}"
-            return f"Asian {linea_asian}"
+            return "Asian 0.5/1"
 
         if modo == "ASIAN+1" or (modo == "ASIAN" and linea == "+1"):
-            linea_asian = f"{total_goles + 0.5}/{total_goles + 1}"
             if condicion:
-                return f"Asian {linea_asian} · {condicion}"
-            return f"Asian {linea_asian}"
+                return f"Asian +1 · {condicion}"
+            return "Asian +1"
 
         if modo == "SINGLE" and linea == "OVER0.5":
             return "+0.5"
@@ -1098,11 +1063,9 @@ async def publicar_resumen_diario_si_toca(context: ContextTypes.DEFAULT_TYPE):
     hoy = hoy_str()
     hora_actual = datetime.now().hour
 
-    # hora mínima para publicar resumen
     if hora_actual < 22:
         return
 
-    # evitar publicar dos veces el mismo día
     if control["ultimo_resumen_dia"] == hoy:
         return
 
@@ -1110,20 +1073,14 @@ async def publicar_resumen_diario_si_toca(context: ContextTypes.DEFAULT_TYPE):
     if not lista:
         return
 
-    texto = construir_resumen(lista, "📊 RESUMEN DEL DÍA")
-
-    for canal_id in CANALES_RESUMEN:
-        try:
-            await context.bot.send_message(
-                chat_id=canal_id,
-                text=texto
-            )
-            print(f"✅ Resumen diario enviado a {canal_id}")
-        except Exception as e:
-            print(f"❌ Error enviando resumen a {canal_id}: {e}")
-
-    control["ultimo_resumen_dia"] = hoy
-    save_state()
+    texto = construir_resumen(lista, "RESUMEN DEL DÍA")
+    try:
+        await context.bot.send_message(chat_id=CANAL_RESUMEN_ID, text=texto)
+        control["ultimo_resumen_dia"] = hoy
+        save_state()
+        print("✅ Resumen diario publicado")
+    except Exception as e:
+        print(f"❌ Error publicando resumen diario: {e}")
 
 
 async def publicar_resumen_semanal_si_toca(context: ContextTypes.DEFAULT_TYPE):
@@ -1131,7 +1088,7 @@ async def publicar_resumen_semanal_si_toca(context: ContextTypes.DEFAULT_TYPE):
     semana = semana_str()
     ahora = datetime.now()
 
-    if ahora.weekday() != 6 or ahora.hour < 23:
+    if ahora.weekday() != 6 or ahora.hour < 22:
         return
 
     if control["ultimo_resumen_semana"] == semana:
@@ -1142,19 +1099,13 @@ async def publicar_resumen_semanal_si_toca(context: ContextTypes.DEFAULT_TYPE):
         return
 
     texto = construir_resumen(lista, "RESUMEN SEMANAL")
-
-    enviados_ok = 0
-    for canal_id in CANALES_RESUMEN:
-        try:
-            await context.bot.send_message(chat_id=canal_id, text=texto)
-            enviados_ok += 1
-            print(f"✅ Resumen semanal publicado en {canal_id}")
-        except Exception as e:
-            print(f"❌ Error publicando resumen semanal en {canal_id}: {e}")
-
-    if enviados_ok > 0:
+    try:
+        await context.bot.send_message(chat_id=CANAL_RESUMEN_ID, text=texto)
         control["ultimo_resumen_semana"] = semana
         save_state()
+        print("✅ Resumen semanal publicado")
+    except Exception as e:
+        print(f"❌ Error publicando resumen semanal: {e}")
 
 
 # ==============================
@@ -1194,26 +1145,19 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE):
     message_id_origen = mensaje.message_id
 
     if chat_id != CANAL_ORIGEN_ID:
-    	print(f"⛔ Ignorado por origen incorrecto | recibido: {chat_id} | esperado: {CANAL_ORIGEN_ID}")
-    	return
+        return
 
     datos = extraer_datos(texto)
 
-    print("DEBUG DATOS EXTRAÍDOS:")
-    print(datos)
-
     if not pasa_filtro_strike_liga(datos):
-    	print("⛔ Ignorado por filtro strike liga")
-    	return
+        return
 
     tipo_pick = detectar_tipo_pick_por_codigo(datos)
 
     if not tipo_pick:
-    	print("⛔ Ignorado: no se detecta GOAL/CORNER por código")
-    	print(f"meta_alerta: {datos.get('meta_alerta')}")
-    	print(f"codigo: {datos.get('codigo')}")
-    	print("-" * 60)
-    	return
+        print("⛔ Ignorado: no se detecta GOAL/CORNER por código")
+        print("-" * 60)
+        return
 
     canales_destino = []
 
