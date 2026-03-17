@@ -1198,8 +1198,8 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE):
     	return
 
     datos = extraer_datos(texto)
-	print("DEBUG DATOS EXTRAÍDOS:")
-	print(datos)
+        print("DEBUG DATOS EXTRAÍDOS:")
+        print(datos)
 
     if not pasa_filtro_strike_liga(datos):
     	print("⛔ Ignorado por filtro strike liga")
