@@ -99,8 +99,29 @@ def load_state():
     global STATE
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
-            STATE = json.load(f)
-            print("✅ Estado cargado desde disco")
+            cargado = json.load(f)
+
+        STATE["mensajes_publicados"] = cargado.get("mensajes_publicados", {})
+        STATE["estadisticas"] = cargado.get("estadisticas", [])
+        STATE["resumen_control"] = cargado.get(
+            "resumen_control",
+            {
+                "ultimo_resumen_dia": None,
+                "ultimo_resumen_semana": None,
+            },
+        )
+
+        fs = cargado.get("free_state", {})
+        STATE["free_state"] = {
+            "fecha": fs.get("fecha"),
+            "goles_enviados": fs.get("goles_enviados", 0),
+            "corners_enviados": fs.get("corners_enviados", 0),
+            "ultimo_score_gol": fs.get("ultimo_score_gol", -1),
+            "ultimo_score_corner": fs.get("ultimo_score_corner", -1),
+            "ultima_hora_envio": fs.get("ultima_hora_envio", None),
+        }
+
+        print("✅ Estado cargado desde disco")
     except FileNotFoundError:
         print("ℹ️ No existe estado previo, se crea uno nuevo")
     except Exception as e:
@@ -632,12 +653,12 @@ def calcular_entrada_sugerida(datos: dict, tipo_pick: str):
                 texto += f"\n📌 Condición: {condicion}"
             return texto
 
-        if modo == "ASIAN+1":
-            linea_asian = f"{total_goles + 0.5}/{total_goles + 1}"
-            texto = f"🎯 Entrada sugerida: asiática {linea_asian} goles {sufijo}"
-            if condicion:
-                texto += f"\n📌 Condición: {condicion}"
-            return texto
+         if modo == "ASIAN+1":
+             linea_asian = f"{total_goles + 0.5}/{total_goles + 1}"
+             texto = f"🎯 Entrada sugerida: asiática {linea_asian} goles {sufijo}"
+             if condicion:
+                 texto += f"\n📌 Condición: {condicion}"
+             return texto
 
         if modo == "NEXTGOAL":
             texto = f"🎯 Entrada sugerida: +{total_goles + 0.5} goles {sufijo}"
@@ -1173,19 +1194,25 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE):
     message_id_origen = mensaje.message_id
 
     if chat_id != CANAL_ORIGEN_ID:
-        return
+    	print(f"⛔ Ignorado por origen incorrecto | recibido: {chat_id} | esperado: {CANAL_ORIGEN_ID}")
+    	return
 
     datos = extraer_datos(texto)
+	print("DEBUG DATOS EXTRAÍDOS:")
+	print(datos)
 
     if not pasa_filtro_strike_liga(datos):
-        return
+    	print("⛔ Ignorado por filtro strike liga")
+    	return
 
     tipo_pick = detectar_tipo_pick_por_codigo(datos)
 
     if not tipo_pick:
-        print("⛔ Ignorado: no se detecta GOAL/CORNER por código")
-        print("-" * 60)
-        return
+    	print("⛔ Ignorado: no se detecta GOAL/CORNER por código")
+    	print(f"meta_alerta: {datos.get('meta_alerta')}")
+    	print(f"codigo: {datos.get('codigo')}")
+    	print("-" * 60)
+    	return
 
     canales_destino = []
 
