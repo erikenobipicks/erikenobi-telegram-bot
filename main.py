@@ -653,12 +653,12 @@ def calcular_entrada_sugerida(datos: dict, tipo_pick: str):
                 texto += f"\n📌 Condición: {condicion}"
             return texto
 
-         if modo == "ASIAN+1":
-             linea_asian = f"{total_goles + 0.5}/{total_goles + 1}"
-             texto = f"🎯 Entrada sugerida: asiática {linea_asian} goles {sufijo}"
-             if condicion:
-                 texto += f"\n📌 Condición: {condicion}"
-             return texto
+        if modo == "ASIAN+1":
+            linea_asian = f"{total_goles + 0.5}/{total_goles + 1}"
+            texto = f"🎯 Entrada sugerida: asiática {linea_asian} goles {sufijo}"
+            if condicion:
+                texto += f"\n📌 Condición: {condicion}"
+            return texto
 
         if modo == "NEXTGOAL":
             texto = f"🎯 Entrada sugerida: +{total_goles + 0.5} goles {sufijo}"
