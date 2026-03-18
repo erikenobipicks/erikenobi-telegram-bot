@@ -15,6 +15,7 @@ from handlers import (
     handler_editado,
     cmd_resumen_hoy,
     cmd_resumen_semana,
+    cmd_resumen_mes,
 )
 
 
@@ -70,6 +71,7 @@ def main() -> None:
 
     app.add_handler(CommandHandler("resumen_hoy",    cmd_resumen_hoy))
     app.add_handler(CommandHandler("resumen_semana", cmd_resumen_semana))
+    app.add_handler(CommandHandler("resumen_mes",    cmd_resumen_mes))
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST,        handler_nuevo))
     app.add_handler(MessageHandler(filters.UpdateType.EDITED_CHANNEL_POST, handler_editado))
 

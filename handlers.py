@@ -15,11 +15,10 @@ from free import debe_enviar_a_free, registrar_envio_free
 from estadisticas import (
     registrar_pick_estadistica,
     actualizar_resultado_estadistica,
-    filtrar_estadisticas_hoy,
-    filtrar_estadisticas_semana,
-    construir_resumen,
+    enviar_resumenes_comando,
     publicar_resumen_diario_si_toca,
     publicar_resumen_semanal_si_toca,
+    publicar_resumen_mensual_si_toca,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,12 +101,14 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
             logger.error(f"Error enviando a {canal_id}: {e}")
 
     # Canal FREE
+    enviado_a_free = False
     ok_free, motivo_free = debe_enviar_a_free(tipo_pick, datos)
     if ok_free:
         try:
             enviado_free = await enviar_mensaje(context, CANAL_FREE_ID, mensaje_base_free)
             destinos_publicados[str(CANAL_FREE_ID)] = enviado_free.message_id
             registrar_envio_free(tipo_pick, datos)
+            enviado_a_free = True
             logger.info(f"Enviado a FREE {CANAL_FREE_ID} (msg {enviado_free.message_id})")
         except Exception as e:
             logger.error(f"Error enviando a FREE: {e}")
@@ -116,17 +117,19 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Guardar en estado
     STATE["mensajes_publicados"][str(msg_id)] = {
-        "tipo_pick":        tipo_pick,
-        "mensaje_base":     mensaje_base,
+        "tipo_pick":         tipo_pick,
+        "mensaje_base":      mensaje_base,
         "mensaje_base_free": mensaje_base_free,
-        "destinos":         destinos_publicados,
+        "destinos":          destinos_publicados,
     }
 
-    registrar_pick_estadistica(msg_id, datos, tipo_pick)
+    # Registrar estadística con el flag de free
+    registrar_pick_estadistica(msg_id, datos, tipo_pick, enviado_a_free=enviado_a_free)
     save_state()
 
     await publicar_resumen_diario_si_toca(context)
     await publicar_resumen_semanal_si_toca(context)
+    await publicar_resumen_mensual_si_toca(context)
 
 
 # ==============================
@@ -172,6 +175,7 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
 
     await publicar_resumen_diario_si_toca(context)
     await publicar_resumen_semanal_si_toca(context)
+    await publicar_resumen_mensual_si_toca(context)
 
 
 # ==============================
@@ -193,12 +197,12 @@ async def handler_editado(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ==============================
 
 async def cmd_resumen_hoy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    lista = filtrar_estadisticas_hoy()
-    texto = construir_resumen(lista, "RESUMEN DEL DÍA")
-    await update.message.reply_text(texto)
+    await enviar_resumenes_comando(update, "dia")
 
 
 async def cmd_resumen_semana(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    lista = filtrar_estadisticas_semana()
-    texto = construir_resumen(lista, "RESUMEN SEMANAL")
-    await update.message.reply_text(texto)
+    await enviar_resumenes_comando(update, "semana")
+
+
+async def cmd_resumen_mes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await enviar_resumenes_comando(update, "mes")

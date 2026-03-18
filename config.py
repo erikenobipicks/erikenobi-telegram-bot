@@ -10,14 +10,13 @@ TOKEN = os.getenv("BOT_TOKEN")
 # CANALES
 # ==============================
 
-CANAL_ORIGEN_ID = -1003876204382   # Origen PREMIUM
+CANAL_ORIGEN_ID  = -1003876204382   # Origen PREMIUM
 
-CANAL_PRUEBAS_ID  = -1002037791209
-CANAL_CORNERS_ID  = -1003895151594
-CANAL_GOLES_ID    = -1003818905455
-CANAL_GENERAL_ID  = -1002037791209
-CANAL_FREE_ID     = -1002973101273
-CANAL_RESUMEN_ID  = CANAL_PRUEBAS_ID
+CANAL_PRUEBAS_ID = -1002037791209
+CANAL_CORNERS_ID = -1003895151594
+CANAL_GOLES_ID   = -1003818905455
+CANAL_GENERAL_ID = -1002037791209
+CANAL_FREE_ID    = -1002973101273
 
 ENVIAR_A_GENERAL = True
 
@@ -37,11 +36,53 @@ FREE_HORA_FIN    = 22
 # FILTROS POR CÓDIGO
 # ==============================
 
-# Solo se publican picks de estas ligas si su Strike Liga >= el mínimo indicado
 FILTRO_STRIKE_LIGA = {
     "UGM": 65,
     "LJ2": 65,
 }
+
+# ==============================
+# RESÚMENES — DESTINOS
+# ==============================
+#
+# tipo_pick:
+#   "gol"    → solo picks de goles
+#   "corner" → solo picks de corners
+#   None     → todos (goles + corners)
+#   "free"   → solo picks enviados al canal FREE
+
+RESUMENES_CONFIG = [
+    {
+        "id":        "goles",
+        "canal_id":  CANAL_GOLES_ID,
+        "tipo_pick": "gol",
+        "label":     "⚽ GOLES",
+    },
+    {
+        "id":        "corners",
+        "canal_id":  CANAL_CORNERS_ID,
+        "tipo_pick": "corner",
+        "label":     "🚩 CORNERS",
+    },
+    {
+        "id":        "general",
+        "canal_id":  CANAL_GENERAL_ID,
+        "tipo_pick": None,
+        "label":     "📊 GENERAL",
+    },
+    {
+        "id":        "free_picks",
+        "canal_id":  CANAL_FREE_ID,
+        "tipo_pick": "free",
+        "label":     "🆓 FREE — Picks del canal",
+    },
+    {
+        "id":        "free_pago",
+        "canal_id":  CANAL_FREE_ID,
+        "tipo_pick": None,
+        "label":     "💎 FREE — Picks premium (referencia)",
+    },
+]
 
 # ==============================
 # PERSISTENCIA
@@ -64,8 +105,7 @@ DEFAULT_STATE = {
         "ultima_hora_envio": None,
     },
     "estadisticas": [],
-    "resumen_control": {
-        "ultimo_resumen_dia": None,
-        "ultimo_resumen_semana": None,
-    },
+    # resumen_control: dict plano con claves "{resumen_id}_{frecuencia}"
+    # Ejemplo: {"goles_dia": "2025-03-18", "general_semana": "2025-W11", "corners_mes": "2025-03"}
+    "resumen_control": {},
 }
