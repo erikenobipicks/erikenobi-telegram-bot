@@ -6,36 +6,42 @@ from config import STATE_FILE, DEFAULT_STATE
 
 logger = logging.getLogger(__name__)
 
+# Solo guardamos en JSON lo que es volátil e intradía:
+# - mensajes_publicados: para poder editar mensajes ya enviados
+# - free_state: cupos y scores del día del canal FREE
+# Las estadísticas y resumen_control van a PostgreSQL (ver db.py)
+
 STATE: dict = copy.deepcopy(DEFAULT_STATE)
 
 
 def save_state() -> None:
+    """Persiste el estado volátil en disco."""
     try:
+        # Guardamos solo las claves ligeras, no las estadísticas (van a DB)
+        ligero = {
+            "mensajes_publicados": STATE.get("mensajes_publicados", {}),
+            "free_state":          STATE.get("free_state", {}),
+        }
         with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(STATE, f, ensure_ascii=False, indent=2)
-        logger.debug("Estado guardado en disco.")
+            json.dump(ligero, f, ensure_ascii=False, indent=2)
+        logger.debug("Estado volátil guardado en disco.")
     except Exception as e:
         logger.error(f"Error guardando estado: {e}")
 
 
 def load_state() -> None:
+    """Carga el estado volátil desde disco."""
     global STATE
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             loaded = json.load(f)
 
-        # Migración suave: si el estado guardado usa el formato antiguo
-        # (resumen_control con keys fijas), lo convertimos al nuevo dict plano
-        control_antiguo = loaded.get("resumen_control", {})
-        if isinstance(control_antiguo, dict) and (
-            "ultimo_resumen_dia" in control_antiguo
-            or "ultimo_resumen_semana" in control_antiguo
-        ):
-            logger.info("Migrando resumen_control al nuevo formato...")
-            loaded["resumen_control"] = {}
+        # Fusionamos con el DEFAULT para garantizar todas las claves
+        STATE = copy.deepcopy(DEFAULT_STATE)
+        STATE["mensajes_publicados"] = loaded.get("mensajes_publicados", {})
+        STATE["free_state"]          = loaded.get("free_state", DEFAULT_STATE["free_state"])
 
-        STATE = loaded
-        logger.info("Estado cargado desde disco.")
+        logger.info("Estado volátil cargado desde disco.")
     except FileNotFoundError:
         logger.info("No existe estado previo — se usará estado inicial.")
     except Exception as e:

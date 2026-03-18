@@ -9,7 +9,8 @@ from telegram.ext import (
 )
 
 from config import TOKEN
-from state import load_state
+from state import load_state, STATE
+from db import init_db, migrar_desde_json
 from handlers import (
     handler_nuevo,
     handler_editado,
@@ -24,12 +25,6 @@ from handlers import (
 # ==============================
 
 def configurar_logging() -> None:
-    """
-    Configura el sistema de logging:
-    - Nivel INFO en consola (con formato legible).
-    - Nivel DEBUG en archivo bot.log (con timestamp completo).
-    - Silencia los logs verbosos de httpx y telegram internos.
-    """
     fmt_consola = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     fmt_archivo = "%(asctime)s [%(levelname)s] %(name)s (%(filename)s:%(lineno)d): %(message)s"
     date_fmt = "%Y-%m-%d %H:%M:%S"
@@ -48,7 +43,6 @@ def configurar_logging() -> None:
     for h in handlers:
         root.addHandler(h)
 
-    # Silenciar librerías externas demasiado verbosas
     for lib in ("httpx", "httpcore", "telegram.ext", "apscheduler"):
         logging.getLogger(lib).setLevel(logging.WARNING)
 
@@ -65,7 +59,25 @@ def main() -> None:
         logger.critical("BOT_TOKEN no definido. Exporta la variable de entorno y vuelve a intentarlo.")
         sys.exit(1)
 
+    # Inicializar DB (crea tablas si no existen)
+    try:
+        init_db()
+    except Exception as e:
+        logger.critical(f"No se pudo conectar a la base de datos: {e}")
+        sys.exit(1)
+
+    # Cargar estado volátil desde disco
     load_state()
+
+    # Migración automática: si el JSON tiene estadísticas del sistema anterior,
+    # las importamos a la DB y las vaciamos del JSON para no duplicar.
+    estadisticas_json = STATE.get("estadisticas", [])
+    if estadisticas_json:
+        logger.info(f"Migrando {len(estadisticas_json)} picks del JSON a PostgreSQL...")
+        migrar_desde_json(estadisticas_json)
+        STATE["estadisticas"] = []   # limpiar para no volver a migrar
+        from state import save_state
+        save_state()
 
     app = ApplicationBuilder().token(TOKEN).build()
 
