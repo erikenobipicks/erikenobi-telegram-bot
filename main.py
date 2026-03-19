@@ -1,5 +1,8 @@
+import datetime
 import logging
 import sys
+
+from zoneinfo import ZoneInfo
 
 from telegram.ext import (
     ApplicationBuilder,
@@ -17,7 +20,18 @@ from handlers import (
     cmd_resumen_hoy,
     cmd_resumen_semana,
     cmd_resumen_mes,
+    cmd_resumen_anual,
+    cmd_resumen_liga,
+    cmd_resumen_codigo,
+    cmd_resultado,
 )
+from estadisticas import (
+    publicar_resumen_diario_si_toca,
+    publicar_resumen_semanal_si_toca,
+    publicar_resumen_mensual_si_toca,
+)
+
+_TZ_MADRID = ZoneInfo("Europe/Madrid")
 
 
 # ==============================
@@ -81,11 +95,46 @@ def main() -> None:
 
     app = ApplicationBuilder().token(TOKEN).build()
 
+    # Resúmenes estándar
     app.add_handler(CommandHandler("resumen_hoy",    cmd_resumen_hoy))
     app.add_handler(CommandHandler("resumen_semana", cmd_resumen_semana))
     app.add_handler(CommandHandler("resumen_mes",    cmd_resumen_mes))
+
+    # Nuevos resúmenes
+    app.add_handler(CommandHandler("resumen_anual",  cmd_resumen_anual))
+    app.add_handler(CommandHandler("resumen_liga",   cmd_resumen_liga))
+    app.add_handler(CommandHandler("resumen_codigo", cmd_resumen_codigo))
+
+    # Corrección manual de resultados (solo admins)
+    app.add_handler(CommandHandler("resultado", cmd_resultado))
+
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST,        handler_nuevo))
     app.add_handler(MessageHandler(filters.UpdateType.EDITED_CHANNEL_POST, handler_editado))
+
+    # ── Jobs programados — resúmenes automáticos ─────────────────────
+    # Se disparan a hora fija en zona horaria Madrid, independientemente
+    # de si llegan alertas. La lógica _debe_publicar_ahora() ya garantiza
+    # que no se dupliquen si la alerta los disparó antes.
+
+    # Diario y semanal: 22:05 todos los días
+    # (_debe_publicar_ahora comprueba que sea domingo para el semanal)
+    app.job_queue.run_daily(
+        callback = lambda ctx: publicar_resumen_diario_si_toca(ctx),
+        time     = datetime.time(22, 5, tzinfo=_TZ_MADRID),
+        name     = "resumen_diario",
+    )
+    app.job_queue.run_daily(
+        callback = lambda ctx: publicar_resumen_semanal_si_toca(ctx),
+        time     = datetime.time(22, 5, tzinfo=_TZ_MADRID),
+        name     = "resumen_semanal",
+    )
+    # Mensual: 10:05 todos los días
+    # (_debe_publicar_ahora comprueba que sea día 1)
+    app.job_queue.run_daily(
+        callback = lambda ctx: publicar_resumen_mensual_si_toca(ctx),
+        time     = datetime.time(10, 5, tzinfo=_TZ_MADRID),
+        name     = "resumen_mensual",
+    )
 
     logger.info("Bot iniciado — escuchando mensajes nuevos y editados.")
     app.run_polling(drop_pending_updates=True)

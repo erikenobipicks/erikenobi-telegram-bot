@@ -7,6 +7,12 @@ import os
 TOKEN = os.getenv("BOT_TOKEN")
 
 # ==============================
+# ADMIN
+# ==============================
+# IDs de Telegram con acceso al comando /resultado
+ADMIN_IDS = [9330181]
+
+# ==============================
 # CANALES
 # ==============================
 
@@ -40,6 +46,17 @@ FILTRO_STRIKE_LIGA = {
     "UGM": 65,
     "LJ2": 65,
 }
+
+# ==============================
+# RACHA — NOTIFICACIONES
+# ==============================
+#
+# Se notifica cuando la racha de HITs consecutivos (ignorando VOIDs)
+# alcanza un múltiplo de RACHA_MINIMA: 5, 10, 15...
+# La notificación se envía al canal CANAL_RACHA_ID.
+
+RACHA_MINIMA   = 5
+CANAL_RACHA_ID = CANAL_GENERAL_ID   # cambia si quieres un canal específico
 
 # ==============================
 # RESÚMENES — DESTINOS

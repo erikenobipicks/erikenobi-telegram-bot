@@ -7,6 +7,7 @@ from config import (
     CANAL_ORIGEN_ID,
     CANAL_CORNERS_ID, CANAL_GOLES_ID, CANAL_GENERAL_ID, CANAL_FREE_ID,
     ENVIAR_A_GENERAL,
+    ADMIN_IDS,
 )
 from state import STATE, save_state
 from extractor import extraer_datos, detectar_tipo_pick_por_codigo, pasa_filtro_strike_liga
@@ -16,9 +17,13 @@ from estadisticas import (
     registrar_pick_estadistica,
     actualizar_resultado_estadistica,
     enviar_resumenes_comando,
+    enviar_resumen_anual_comando,
+    enviar_resumen_liga_comando,
+    enviar_resumen_codigo_comando,
     publicar_resumen_diario_si_toca,
     publicar_resumen_semanal_si_toca,
     publicar_resumen_mensual_si_toca,
+    verificar_racha_y_notificar,
 )
 
 logger = logging.getLogger(__name__)
@@ -144,34 +149,48 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
     if chat_id != CANAL_ORIGEN_ID:
         return
 
-    key = str(msg_id)
-    if key not in STATE["mensajes_publicados"]:
-        logger.info("Editado ignorado: no tenemos referencia del original.")
-        return
-
-    registro  = STATE["mensajes_publicados"][key]
-    tipo_pick = registro["tipo_pick"]
-    destinos  = registro["destinos"]
-
     datos = extraer_datos(texto)
 
     if not datos.get("resultado"):
         logger.info("Editado detectado, pero sin Hit/Miss/Void todavía.")
         return
 
-    logger.info(f"EDITADO | tipo: {tipo_pick} | resultado: {datos.get('resultado')}")
+    key = str(msg_id)
 
-    for canal_id_str, msg_id_publicado in destinos.items():
-        base = (
-            registro["mensaje_base_free"]
-            if str(canal_id_str) == str(CANAL_FREE_ID)
-            else registro["mensaje_base"]
+    # ── Caso normal: tenemos el registro en STATE ─────────────────────
+    if key in STATE["mensajes_publicados"]:
+        registro  = STATE["mensajes_publicados"][key]
+        tipo_pick = registro["tipo_pick"]
+        destinos  = registro["destinos"]
+
+        logger.info(f"EDITADO | tipo: {tipo_pick} | resultado: {datos.get('resultado')}")
+
+        for canal_id_str, msg_id_publicado in destinos.items():
+            base = (
+                registro["mensaje_base_free"]
+                if str(canal_id_str) == str(CANAL_FREE_ID)
+                else registro["mensaje_base"]
+            )
+            texto_editado = construir_mensaje_editado(base, datos, tipo_pick)
+            await editar_mensaje(context, int(canal_id_str), msg_id_publicado, texto_editado)
+
+    # ── Caso tardío: el bot se reinició y perdimos el STATE ───────────
+    # No podemos editar los mensajes en los canales destino porque no
+    # tenemos los message_id, pero sí podemos actualizar la estadística
+    # en la base de datos para que los resúmenes sean correctos.
+    else:
+        tipo_pick = detectar_tipo_pick_por_codigo(datos) or "desconocido"
+        logger.warning(
+            f"EDITADO TARDÍO | msg_id: {msg_id} | resultado: {datos.get('resultado')} | "
+            f"Sin referencia en STATE — solo se actualiza la DB."
         )
-        texto_editado = construir_mensaje_editado(base, datos, tipo_pick)
-        await editar_mensaje(context, int(canal_id_str), msg_id_publicado, texto_editado)
 
     actualizar_resultado_estadistica(msg_id, datos.get("resultado"))
     save_state()
+
+    # Comprobar racha solo cuando el resultado es HIT
+    if datos.get("resultado") == "HIT":
+        await verificar_racha_y_notificar(context, tipo_pick)
 
     await publicar_resumen_diario_si_toca(context)
     await publicar_resumen_semanal_si_toca(context)
@@ -206,3 +225,85 @@ async def cmd_resumen_semana(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def cmd_resumen_mes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await enviar_resumenes_comando(update, "mes")
+
+
+async def cmd_resumen_anual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Resumen del año en curso con desglose mensual."""
+    await enviar_resumen_anual_comando(update)
+
+
+async def cmd_resumen_liga(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Uso: /resumen_liga <nombre_liga>
+    Ejemplo: /resumen_liga LALIGA
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "Uso: /resumen_liga <nombre>\nEjemplo: /resumen_liga LALIGA"
+        )
+        return
+    liga = " ".join(context.args)
+    await enviar_resumen_liga_comando(update, liga)
+
+
+async def cmd_resumen_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Uso: /resumen_codigo <codigo>
+    Ejemplo: /resumen_codigo CM02
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "Uso: /resumen_codigo <codigo>\nEjemplo: /resumen_codigo CM02"
+        )
+        return
+    codigo = context.args[0]
+    await enviar_resumen_codigo_comando(update, codigo)
+
+
+# ==============================
+# COMANDO /resultado — CORRECCIÓN MANUAL
+# ==============================
+
+async def cmd_resultado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Permite corregir o asignar manualmente el resultado de un pick en la DB.
+    Solo accesible para admins.
+
+    Uso: /resultado <message_id_origen> <HIT|MISS|VOID>
+    Ejemplo: /resultado 12345 HIT
+
+    message_id_origen es el ID del mensaje en el canal origen (el número
+    que aparece en la URL del mensaje de Telegram).
+    """
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("No tienes permisos para usar este comando.")
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "Uso: /resultado <message_id_origen> <HIT|MISS|VOID>\n"
+            "Ejemplo: /resultado 12345 HIT"
+        )
+        return
+
+    msg_id_str = context.args[0]
+    resultado  = context.args[1].upper()
+
+    if resultado not in ("HIT", "MISS", "VOID"):
+        await update.message.reply_text(
+            "Resultado no válido. Usa: HIT, MISS o VOID"
+        )
+        return
+
+    actualizar_resultado_estadistica(msg_id_str, resultado)
+
+    logger.info(
+        f"Resultado actualizado manualmente por admin {user.id}: "
+        f"msg {msg_id_str} → {resultado}"
+    )
+    await update.message.reply_text(
+        f"✅ Resultado actualizado en la DB:\n"
+        f"Pick {msg_id_str} → {resultado}\n\n"
+        f"Los próximos resúmenes ya reflejarán este cambio."
+    )

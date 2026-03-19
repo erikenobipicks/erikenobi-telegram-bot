@@ -59,6 +59,14 @@ def init_db() -> None:
                 CREATE INDEX IF NOT EXISTS idx_picks_free
                 ON picks (enviado_a_free);
             """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_picks_liga
+                ON picks (liga);
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_picks_codigo
+                ON picks (codigo);
+            """)
 
             # Control de resúmenes ya publicados (evita duplicados tras reinicios)
             cur.execute("""
@@ -129,7 +137,7 @@ def db_actualizar_resultado(message_id_origen: str, resultado: str) -> None:
 def db_picks_por_periodo(periodo: str) -> list[dict]:
     """
     Devuelve picks del período indicado.
-    periodo: "dia" | "semana" | "mes_anterior"
+    periodo: "dia" | "semana" | "mes_anterior" | "anio"
     """
     try:
         with get_conn() as conn:
@@ -159,12 +167,136 @@ def db_picks_por_periodo(periodo: str) -> list[dict]:
                         ORDER BY fecha_hora;
                     """)
 
+                elif periodo == "anio":
+                    cur.execute("""
+                        SELECT * FROM picks
+                        WHERE date_trunc('year', fecha) =
+                              date_trunc('year', CURRENT_DATE AT TIME ZONE 'Europe/Madrid')
+                        ORDER BY fecha_hora;
+                    """)
+
                 else:
                     return []
 
                 return cur.fetchall()
     except Exception as e:
         logger.error(f"Error leyendo picks de DB ({periodo}): {e}")
+        return []
+
+
+def db_picks_filtrados(
+    liga: str | None = None,
+    codigo: str | None = None,
+) -> list[dict]:
+    """
+    Devuelve todos los picks filtrando opcionalmente por liga y/o código.
+    La búsqueda es case-insensitive y acepta coincidencia parcial (ILIKE '%valor%').
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                condiciones = []
+                params = []
+
+                if liga:
+                    condiciones.append("liga ILIKE %s")
+                    params.append(f"%{liga}%")
+
+                if codigo:
+                    condiciones.append("codigo ILIKE %s")
+                    params.append(f"%{codigo}%")
+
+                where = ("WHERE " + " AND ".join(condiciones)) if condiciones else ""
+
+                cur.execute(f"""
+                    SELECT * FROM picks
+                    {where}
+                    ORDER BY fecha_hora;
+                """, params)
+
+                return cur.fetchall()
+    except Exception as e:
+        logger.error(f"Error en db_picks_filtrados (liga={liga}, codigo={codigo}): {e}")
+        return []
+
+
+# ==============================
+# RACHA
+# ==============================
+
+def db_calcular_racha_actual(tipo_pick: str | None = None) -> int:
+    """
+    Cuenta los HITs consecutivos al final de la lista de picks resueltos.
+    Los VOIDs se ignoran (no cortan la racha).
+    Si tipo_pick se especifica, filtra solo ese tipo.
+    Devuelve el número de HITs consecutivos actuales.
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if tipo_pick:
+                    cur.execute("""
+                        SELECT resultado FROM picks
+                        WHERE resultado IS NOT NULL
+                          AND resultado != 'VOID'
+                          AND tipo_pick = %s
+                        ORDER BY fecha_hora DESC
+                        LIMIT 30;
+                    """, (tipo_pick,))
+                else:
+                    cur.execute("""
+                        SELECT resultado FROM picks
+                        WHERE resultado IS NOT NULL
+                          AND resultado != 'VOID'
+                        ORDER BY fecha_hora DESC
+                        LIMIT 30;
+                    """)
+                rows = cur.fetchall()
+
+        racha = 0
+        for row in rows:
+            if row["resultado"] == "HIT":
+                racha += 1
+            else:
+                break
+        return racha
+    except Exception as e:
+        logger.error(f"Error calculando racha: {e}")
+        return 0
+
+
+# ==============================
+# STATS MENSUALES (para bot premium)
+# ==============================
+
+def db_stats_por_mes(meses: int = 6) -> list[dict]:
+    """
+    Devuelve estadísticas agrupadas por mes y tipo_pick para los últimos N meses.
+    Cada fila incluye: mes (YYYY-MM), tipo_pick, total, hits, misses, voids.
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        TO_CHAR(fecha, 'YYYY-MM') AS mes,
+                        tipo_pick,
+                        COUNT(*)                                              AS total,
+                        SUM(CASE WHEN resultado = 'HIT'  THEN 1 ELSE 0 END) AS hits,
+                        SUM(CASE WHEN resultado = 'MISS' THEN 1 ELSE 0 END) AS misses,
+                        SUM(CASE WHEN resultado = 'VOID' THEN 1 ELSE 0 END) AS voids
+                    FROM picks
+                    WHERE resultado IS NOT NULL
+                      AND fecha >= DATE_TRUNC(
+                            'month',
+                            CURRENT_DATE - ((%s - 1) || ' months')::INTERVAL
+                          )
+                    GROUP BY mes, tipo_pick
+                    ORDER BY mes DESC, tipo_pick;
+                """, (meses,))
+                return cur.fetchall()
+    except Exception as e:
+        logger.error(f"Error en db_stats_por_mes: {e}")
         return []
 
 

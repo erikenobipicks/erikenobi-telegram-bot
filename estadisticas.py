@@ -6,10 +6,12 @@ from db import (
     db_registrar_pick,
     db_actualizar_resultado,
     db_picks_por_periodo,
+    db_picks_filtrados,
+    db_calcular_racha_actual,
     db_ya_publicado,
     db_marcar_publicado,
 )
-from config import RESUMENES_CONFIG
+from config import RESUMENES_CONFIG, RACHA_MINIMA, CANAL_RACHA_ID
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +102,48 @@ def construir_resumen(lista: list, titulo: str) -> str:
     return "\n".join(lineas)
 
 
+def _construir_resumen_anual(lista: list) -> str:
+    """
+    Resumen anual con desglose mes a mes.
+    """
+    from collections import defaultdict
+
+    anio_actual = ahora_madrid().year
+    texto_base  = construir_resumen(lista, f"RESUMEN ANUAL {anio_actual}")
+
+    # Desglose por mes
+    por_mes: dict[str, list] = defaultdict(list)
+    for pick in lista:
+        fecha = pick.get("fecha")
+        if fecha:
+            mes_key = str(fecha)[:7]  # "YYYY-MM"
+            por_mes[mes_key].append(pick)
+
+    if not por_mes:
+        return texto_base
+
+    # Nombres de mes en español
+    meses_es = {
+        "01": "Ene", "02": "Feb", "03": "Mar", "04": "Abr",
+        "05": "May", "06": "Jun", "07": "Jul", "08": "Ago",
+        "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dic",
+    }
+
+    lineas_mes = ["\n📆 Desglose mensual:"]
+    for mes_key in sorted(por_mes.keys(), reverse=True):
+        picks_mes  = por_mes[mes_key]
+        hits_m     = sum(1 for x in picks_mes if x.get("resultado") == "HIT")
+        misses_m   = sum(1 for x in picks_mes if x.get("resultado") == "MISS")
+        resueltos  = hits_m + misses_m
+        strike_m   = round((hits_m / resueltos) * 100, 1) if resueltos > 0 else 0
+        nombre_mes = meses_es.get(mes_key[5:], mes_key[5:])
+        lineas_mes.append(
+            f"  {nombre_mes}: {len(picks_mes)} picks | {strike_m}% strike"
+        )
+
+    return texto_base + "\n".join(lineas_mes)
+
+
 # ==============================
 # CLAVES Y CONDICIONES DE PUBLICACIÓN
 # ==============================
@@ -147,6 +191,7 @@ _PERIODO_DB = {
     "dia":    "dia",
     "semana": "semana",
     "mes":    "mes_anterior",
+    "anio":   "anio",
 }
 
 
@@ -207,6 +252,39 @@ async def publicar_resumen_mensual_si_toca(context) -> None:
 
 
 # ==============================
+# RACHA — NOTIFICACIÓN AUTOMÁTICA
+# ==============================
+
+async def verificar_racha_y_notificar(context, tipo_pick: str) -> None:
+    """
+    Comprueba la racha de HITs consecutivos tras actualizar un resultado.
+    Notifica al canal CANAL_RACHA_ID cuando la racha alcanza un múltiplo
+    de RACHA_MINIMA (5, 10, 15...).
+    Los VOIDs no cortan la racha.
+    """
+    try:
+        racha = db_calcular_racha_actual()
+        if racha < RACHA_MINIMA or racha % RACHA_MINIMA != 0:
+            return
+
+        emoji_tipo = "⚽" if tipo_pick == "gol" else "🚩"
+        tipo_nombre = "Goles" if tipo_pick == "gol" else "Corners"
+
+        texto = (
+            f"🔥 ¡RACHA ACTIVA!\n\n"
+            f"{emoji_tipo} {racha} HITs consecutivos en el canal\n"
+            f"(goles + corners combinados)\n\n"
+            f"El último resultado ha sido {tipo_nombre}.\n"
+            f"¡Seguimos! 💪"
+        )
+
+        await context.bot.send_message(chat_id=CANAL_RACHA_ID, text=texto)
+        logger.info(f"Notificación de racha enviada: {racha} HITs consecutivos")
+    except Exception as e:
+        logger.error(f"Error en verificar_racha_y_notificar: {e}")
+
+
+# ==============================
 # RESÚMENES BAJO DEMANDA (comandos)
 # ==============================
 
@@ -230,3 +308,54 @@ async def enviar_resumenes_comando(update, periodo: str) -> None:
             else f"📊 {titulo}\n\nSin picks para {nombre}."
         )
         await update.message.reply_text(texto)
+
+
+async def enviar_resumen_anual_comando(update) -> None:
+    """
+    Resumen del año en curso con desglose mes a mes, enviado como respuesta
+    al comando /resumen_anual.
+    """
+    lista = db_picks_por_periodo("anio")
+
+    if not lista:
+        await update.message.reply_text("No hay picks registrados para este año.")
+        return
+
+    texto = _construir_resumen_anual(lista)
+    await update.message.reply_text(texto)
+
+
+async def enviar_resumen_liga_comando(update, liga: str) -> None:
+    """
+    Resumen de todos los picks de una liga específica.
+    Uso: /resumen_liga LALIGA
+    """
+    lista = db_picks_filtrados(liga=liga)
+
+    if not lista:
+        await update.message.reply_text(
+            f"No se encontraron picks para la liga: {liga}"
+        )
+        return
+
+    titulo = f"RESUMEN — Liga: {liga.upper()}"
+    texto  = construir_resumen(lista, titulo)
+    await update.message.reply_text(texto)
+
+
+async def enviar_resumen_codigo_comando(update, codigo: str) -> None:
+    """
+    Resumen de todos los picks de un código específico.
+    Uso: /resumen_codigo CM02
+    """
+    lista = db_picks_filtrados(codigo=codigo)
+
+    if not lista:
+        await update.message.reply_text(
+            f"No se encontraron picks con el código: {codigo}"
+        )
+        return
+
+    titulo = f"RESUMEN — Código: {codigo.upper()}"
+    texto  = construir_resumen(lista, titulo)
+    await update.message.reply_text(texto)
