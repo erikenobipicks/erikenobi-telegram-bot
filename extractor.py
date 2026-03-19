@@ -179,13 +179,32 @@ def obtener_bloques_codigo(datos: dict) -> list[str]:
 
 
 def detectar_tipo_pick_por_codigo(datos: dict) -> str | None:
+    meta = datos.get("meta_alerta") or ""
+
+    # ── 1. Emojis en toda la línea de título (más fiable que palabras clave) ──
+    # ⛳️ o ⛳ → corner
+    if "⛳" in meta:
+        return "corner"
+    # ⚽️ o ⚽ → gol
+    if "⚽" in meta:
+        return "gol"
+
+    # ── 2. Fallback: palabras clave en partes[1] ──────────────────────────────
     partes = obtener_bloques_codigo(datos)
     if len(partes) >= 2:
         mercado = partes[1].upper()
         if "CORNER" in mercado:
             return "corner"
-        if "GOAL" in mercado or "GOL" in mercado:
+        if "GOAL" in mercado or "GOL" in mercado or "OVER" in mercado:
             return "gol"
+
+    # ── 3. Fallback amplio: buscar en toda la meta_alerta ─────────────────────
+    meta_up = meta.upper()
+    if "CORNER" in meta_up:
+        return "corner"
+    if "GOAL" in meta_up or "GOL" in meta_up or "OVER 2.5" in meta_up or "OVER 0.5" in meta_up:
+        return "gol"
+
     return None
 
 
