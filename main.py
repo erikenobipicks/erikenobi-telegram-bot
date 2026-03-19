@@ -116,22 +116,31 @@ def main() -> None:
     # de si llegan alertas. La lógica _debe_publicar_ahora() ya garantiza
     # que no se dupliquen si la alerta los disparó antes.
 
+    async def job_resumen_diario(ctx):
+        await publicar_resumen_diario_si_toca(ctx)
+
+    async def job_resumen_semanal(ctx):
+        await publicar_resumen_semanal_si_toca(ctx)
+
+    async def job_resumen_mensual(ctx):
+        await publicar_resumen_mensual_si_toca(ctx)
+
     # Diario y semanal: 22:05 todos los días
     # (_debe_publicar_ahora comprueba que sea domingo para el semanal)
     app.job_queue.run_daily(
-        callback = lambda ctx: publicar_resumen_diario_si_toca(ctx),
+        callback = job_resumen_diario,
         time     = datetime.time(22, 5, tzinfo=_TZ_MADRID),
         name     = "resumen_diario",
     )
     app.job_queue.run_daily(
-        callback = lambda ctx: publicar_resumen_semanal_si_toca(ctx),
+        callback = job_resumen_semanal,
         time     = datetime.time(22, 5, tzinfo=_TZ_MADRID),
         name     = "resumen_semanal",
     )
     # Mensual: 10:05 todos los días
     # (_debe_publicar_ahora comprueba que sea día 1)
     app.job_queue.run_daily(
-        callback = lambda ctx: publicar_resumen_mensual_si_toca(ctx),
+        callback = job_resumen_mensual,
         time     = datetime.time(10, 5, tzinfo=_TZ_MADRID),
         name     = "resumen_mensual",
     )
