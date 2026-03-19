@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from telegram import Update
@@ -10,6 +11,7 @@ from config import (
     ADMIN_IDS,
 )
 from state import STATE, save_state
+from db import db_guardar_mensaje_publicado, db_cargar_mensajes_publicados
 from extractor import extraer_datos, detectar_tipo_pick_por_codigo, pasa_filtro_strike_liga
 from formateador import construir_mensaje_base, construir_mensaje_editado
 from free import debe_enviar_a_free, registrar_envio_free
@@ -28,17 +30,93 @@ from estadisticas import (
 
 logger = logging.getLogger(__name__)
 
+# Segundos de espera entre reintentos y número máximo de intentos
+_REINTENTOS     = 3
+_ESPERA_REINTENTO = 3   # segundos
+
 
 # ==============================
-# ENVÍO / EDICIÓN TELEGRAM
+# DEDUPLICACIÓN EN MEMORIA
+# ==============================
+# Clave: (partido_normalizado, codigo_normalizado)
+# Se resetea automáticamente al cambiar el día (zona horaria Madrid).
+# No se persiste — si el bot se reinicia, la memoria se limpia,
+# lo cual es aceptable porque un reinicio implica nueva jornada.
+
+_dedup_fecha: str = ""           # fecha del último reset
+_dedup_set: set[tuple] = set()   # claves de picks ya publicados hoy
+
+
+def _normalizar(texto: str | None) -> str:
+    """Normaliza una cadena para comparación: minúsculas y sin espacios extra."""
+    if not texto:
+        return ""
+    return texto.strip().lower()
+
+
+def _es_duplicado(datos: dict) -> bool:
+    """
+    Devuelve True si ya se publicó un pick con el mismo partido y código hoy.
+    Resetea el registro diario si ha cambiado el día.
+    """
+    global _dedup_fecha, _dedup_set
+
+    from utils import hoy_str
+    hoy = hoy_str()
+
+    # Resetear al cambiar el día
+    if hoy != _dedup_fecha:
+        _dedup_fecha = hoy
+        _dedup_set   = set()
+        logger.debug("Registro de deduplicación reseteado para nueva jornada.")
+
+    partido = _normalizar(datos.get("partido"))
+    codigo  = _normalizar(datos.get("codigo"))
+
+    # Si no podemos identificar el partido, no filtramos
+    if not partido:
+        return False
+
+    clave = (partido, codigo)
+    return clave in _dedup_set
+
+
+def _registrar_publicado(datos: dict) -> None:
+    """Registra la clave del pick como ya publicado."""
+    partido = _normalizar(datos.get("partido"))
+    codigo  = _normalizar(datos.get("codigo"))
+    if partido:
+        _dedup_set.add((partido, codigo))
+
+
+# ==============================
+# ENVÍO / EDICIÓN TELEGRAM CON REINTENTOS
 # ==============================
 
 async def enviar_mensaje(context: ContextTypes.DEFAULT_TYPE, canal_id: int, texto: str):
-    return await context.bot.send_message(
-        chat_id=canal_id,
-        text=texto,
-        parse_mode="HTML",
-    )
+    """
+    Envía un mensaje con reintentos automáticos en caso de timeout.
+    Lanza excepción si todos los intentos fallan.
+    """
+    ultimo_error = None
+    for intento in range(1, _REINTENTOS + 1):
+        try:
+            return await context.bot.send_message(
+                chat_id=canal_id,
+                text=texto,
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            ultimo_error = e
+            if intento < _REINTENTOS:
+                logger.warning(
+                    f"Intento {intento}/{_REINTENTOS} fallido al enviar a {canal_id}: {e}. "
+                    f"Reintentando en {_ESPERA_REINTENTO}s…"
+                )
+                await asyncio.sleep(_ESPERA_REINTENTO)
+            else:
+                logger.error(f"Error enviando a {canal_id} tras {_REINTENTOS} intentos: {e}")
+    raise ultimo_error
 
 
 async def editar_mensaje(
@@ -47,16 +125,28 @@ async def editar_mensaje(
     message_id: int,
     texto_nuevo: str,
 ) -> None:
-    try:
-        await context.bot.edit_message_text(
-            chat_id=canal_id,
-            message_id=message_id,
-            text=texto_nuevo,
-            parse_mode="HTML",
-        )
-        logger.info(f"Mensaje editado en canal {canal_id} (msg {message_id})")
-    except Exception as e:
-        logger.error(f"Error editando mensaje en {canal_id}: {e}")
+    """
+    Edita un mensaje con reintentos automáticos en caso de timeout.
+    """
+    for intento in range(1, _REINTENTOS + 1):
+        try:
+            await context.bot.edit_message_text(
+                chat_id=canal_id,
+                message_id=message_id,
+                text=texto_nuevo,
+                parse_mode="HTML",
+            )
+            logger.info(f"Mensaje editado en canal {canal_id} (msg {message_id})")
+            return
+        except Exception as e:
+            if intento < _REINTENTOS:
+                logger.warning(
+                    f"Intento {intento}/{_REINTENTOS} fallido al editar en {canal_id}: {e}. "
+                    f"Reintentando en {_ESPERA_REINTENTO}s…"
+                )
+                await asyncio.sleep(_ESPERA_REINTENTO)
+            else:
+                logger.error(f"Error editando mensaje en {canal_id} tras {_REINTENTOS} intentos: {e}")
 
 
 # ==============================
@@ -79,6 +169,14 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
     tipo_pick = detectar_tipo_pick_por_codigo(datos)
     if not tipo_pick:
         logger.info("Ignorado: no se detecta GOAL/CORNER por código.")
+        return
+
+    # Filtro de duplicados: mismo partido + mismo mercado en la misma jornada
+    if _es_duplicado(datos):
+        logger.info(
+            f"DUPLICADO ignorado | partido: {datos.get('partido')} | "
+            f"codigo: {datos.get('codigo')} | msg_id: {msg_id}"
+        )
         return
 
     # Canales destino
@@ -120,16 +218,26 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         logger.info(f"No enviado a FREE: {motivo_free}")
 
-    # Guardar en estado
+    # Guardar en estado local Y en DB (para sobrevivir reinicios de Railway)
     STATE["mensajes_publicados"][str(msg_id)] = {
         "tipo_pick":         tipo_pick,
         "mensaje_base":      mensaje_base,
         "mensaje_base_free": mensaje_base_free,
         "destinos":          destinos_publicados,
     }
+    db_guardar_mensaje_publicado(
+        msg_id_origen     = str(msg_id),
+        tipo_pick         = tipo_pick,
+        mensaje_base      = mensaje_base,
+        mensaje_base_free = mensaje_base_free,
+        destinos          = destinos_publicados,
+    )
 
     # Registrar estadística con el flag de free
     registrar_pick_estadistica(msg_id, datos, tipo_pick, enviado_a_free=enviado_a_free)
+
+    # Registrar en deduplicación para que no se vuelva a publicar hoy
+    _registrar_publicado(datos)
     save_state()
 
     await publicar_resumen_diario_si_toca(context)
@@ -157,7 +265,13 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
 
     key = str(msg_id)
 
-    # ── Caso normal: tenemos el registro en STATE ─────────────────────
+    # ── Si no está en STATE, intentar recuperarlo de la DB ───────────
+    # Esto ocurre cuando Railway reinicia y borra el JSON local.
+    if key not in STATE["mensajes_publicados"]:
+        logger.info(f"msg {msg_id} no en STATE, buscando en DB…")
+        STATE["mensajes_publicados"].update(db_cargar_mensajes_publicados())
+
+    # ── Caso normal: tenemos el registro (en STATE o recuperado de DB) ─
     if key in STATE["mensajes_publicados"]:
         registro  = STATE["mensajes_publicados"][key]
         tipo_pick = registro["tipo_pick"]
@@ -174,15 +288,12 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
             texto_editado = construir_mensaje_editado(base, datos, tipo_pick)
             await editar_mensaje(context, int(canal_id_str), msg_id_publicado, texto_editado)
 
-    # ── Caso tardío: el bot se reinició y perdimos el STATE ───────────
-    # No podemos editar los mensajes en los canales destino porque no
-    # tenemos los message_id, pero sí podemos actualizar la estadística
-    # en la base de datos para que los resúmenes sean correctos.
+    # ── Caso tardío: no está ni en STATE ni en DB ─────────────────────
     else:
         tipo_pick = detectar_tipo_pick_por_codigo(datos) or "desconocido"
         logger.warning(
             f"EDITADO TARDÍO | msg_id: {msg_id} | resultado: {datos.get('resultado')} | "
-            f"Sin referencia en STATE — solo se actualiza la DB."
+            f"Sin referencia en STATE ni DB — solo se actualiza la estadística."
         )
 
     actualizar_resultado_estadistica(msg_id, datos.get("resultado"))

@@ -76,6 +76,22 @@ def init_db() -> None:
                 );
             """)
 
+            # Mensajes publicados — persiste los destinos para poder editar tras reinicios
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mensajes_publicados (
+                    msg_id_origen    TEXT PRIMARY KEY,
+                    tipo_pick        TEXT NOT NULL,
+                    mensaje_base     TEXT NOT NULL,
+                    mensaje_base_free TEXT NOT NULL,
+                    destinos         TEXT NOT NULL,
+                    fecha            DATE NOT NULL DEFAULT CURRENT_DATE
+                );
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_mensajes_fecha
+                ON mensajes_publicados (fecha);
+            """)
+
     logger.info("Base de datos inicializada correctamente.")
 
 
@@ -298,6 +314,68 @@ def db_stats_por_mes(meses: int = 6) -> list[dict]:
     except Exception as e:
         logger.error(f"Error en db_stats_por_mes: {e}")
         return []
+
+
+# ==============================
+# MENSAJES PUBLICADOS — PERSISTENCIA EN DB
+# ==============================
+
+def db_guardar_mensaje_publicado(
+    msg_id_origen: str,
+    tipo_pick: str,
+    mensaje_base: str,
+    mensaje_base_free: str,
+    destinos: dict,
+) -> None:
+    """Guarda el registro de un pick publicado para poder editarlo tras reinicios."""
+    import json
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO mensajes_publicados
+                        (msg_id_origen, tipo_pick, mensaje_base, mensaje_base_free, destinos)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (msg_id_origen) DO UPDATE SET
+                        destinos = EXCLUDED.destinos;
+                """, (
+                    msg_id_origen, tipo_pick, mensaje_base,
+                    mensaje_base_free, json.dumps(destinos),
+                ))
+    except Exception as e:
+        logger.error(f"Error guardando mensaje publicado en DB: {e}")
+
+
+def db_cargar_mensajes_publicados() -> dict:
+    """
+    Carga todos los mensajes publicados de hoy desde la DB.
+    Devuelve el mismo formato que STATE['mensajes_publicados'].
+    """
+    import json
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT msg_id_origen, tipo_pick, mensaje_base,
+                           mensaje_base_free, destinos
+                    FROM mensajes_publicados
+                    WHERE fecha = CURRENT_DATE AT TIME ZONE 'Europe/Madrid'
+                    ORDER BY fecha;
+                """)
+                rows = cur.fetchall()
+
+        resultado = {}
+        for row in rows:
+            resultado[row["msg_id_origen"]] = {
+                "tipo_pick":          row["tipo_pick"],
+                "mensaje_base":       row["mensaje_base"],
+                "mensaje_base_free":  row["mensaje_base_free"],
+                "destinos":           json.loads(row["destinos"]),
+            }
+        return resultado
+    except Exception as e:
+        logger.error(f"Error cargando mensajes publicados de DB: {e}")
+        return {}
 
 
 # ==============================
