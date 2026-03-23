@@ -94,13 +94,30 @@ def extraer_datos(texto: str) -> dict:
         None,
     )
 
-    # Partido = línea inmediatamente anterior a TIMER
+    # Kickoff idx — ancla para mensajes prepartido (no tienen TIMER)
+    kickoff_idx = next(
+        (i for i, l in enumerate(lineas)
+         if l.upper().startswith("⌛ KICKOFF") or l.upper().startswith("KICKOFF:")),
+        None,
+    )
+
+    # Partido = línea inmediatamente anterior a TIMER (live)
+    # o línea con " vs " antes de Kickoff (prepartido)
     partido_idx = None
     if timer_idx is not None and timer_idx >= 1:
         posible = lineas[timer_idx - 1].strip()
         if not _es_linea_excluida(posible):
             datos["partido"] = re.sub(r"^[^\w\d]+", "", posible).strip()
             partido_idx = timer_idx - 1
+
+    elif kickoff_idx is not None:
+        # Prepartido: buscar la línea con " vs " justo antes del Kickoff
+        for idx in range(kickoff_idx - 1, 0, -1):
+            linea = lineas[idx].strip()
+            if " vs " in linea.lower() and not _es_linea_excluida(linea):
+                datos["partido"] = re.sub(r"^[^\w\d]+", "", linea).strip()
+                partido_idx = idx
+                break
 
     # Liga = línea anterior al partido
     if partido_idx is not None and partido_idx >= 1:
