@@ -24,6 +24,8 @@ from handlers import (
     cmd_resumen_liga,
     cmd_resumen_codigo,
     cmd_resultado,
+    cmd_bankroll,
+    handler_excel_bankroll,
 )
 from estadisticas import (
     publicar_resumen_diario_si_toca,
@@ -106,7 +108,14 @@ def main() -> None:
     app.add_handler(CommandHandler("resumen_codigo", cmd_resumen_codigo))
 
     # Corrección manual de resultados (solo admins)
-    app.add_handler(CommandHandler("resultado", cmd_resultado))
+    app.add_handler(CommandHandler("resultado",  cmd_resultado))
+
+    # Bankroll (solo admins)
+    app.add_handler(CommandHandler("bankroll",   cmd_bankroll))
+    app.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & filters.Document.MimeType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        handler_excel_bankroll,
+    ))
 
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST,        handler_nuevo))
     app.add_handler(MessageHandler(filters.UpdateType.EDITED_CHANNEL_POST, handler_editado))

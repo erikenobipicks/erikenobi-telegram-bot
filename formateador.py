@@ -14,6 +14,7 @@ Dos funciones públicas:
 import re
 import logging
 
+from bankroll import construir_linea_stake_pre
 from extractor import (
     detectar_fase_por_codigo,
     detectar_periodo_por_codigo,
@@ -292,6 +293,10 @@ def _construir_pre(datos: dict, tipo_pick: str) -> str:
         cuota_local = _cuota_local(odds_raw)
         if cuota_local:
             lineas.append(f"💰 Cuota local: <b>{cuota_local}</b>")
+            # Stake recomendado
+            linea_stake = construir_linea_stake_pre(cuota_local)
+            if linea_stake:
+                lineas.append(linea_stake)
 
     # Cuotas 1X2 completas
     if odds:

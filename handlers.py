@@ -16,6 +16,7 @@ from extractor import (
     detectar_fase_por_codigo,
     pasa_filtro_strike_liga,
 )
+from bankroll import get_bankroll, set_bankroll, leer_bankroll_excel
 from formateador import construir_mensaje_base, construir_mensaje_editado
 from free import debe_enviar_a_free, registrar_envio_free
 from estadisticas import (
@@ -343,3 +344,100 @@ async def cmd_resultado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"Pick {msg_id_str} → {resultado}\n\n"
         f"Los próximos resúmenes ya reflejarán este cambio."
     )
+
+
+# ==============================
+# BANKROLL — CONSULTA Y ACTUALIZACIÓN
+# ==============================
+
+async def cmd_bankroll(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Consulta o actualiza el bankroll.
+    Uso: /bankroll          → muestra el bankroll actual
+         /bankroll 1500     → actualiza a 1500€
+    Solo admins.
+    """
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("No tienes permisos para usar este comando.")
+        return
+
+    if not context.args:
+        actual = get_bankroll()
+        stake_base = round(actual * 0.02, 2)
+        await update.message.reply_text(
+            f"💰 Bankroll actual: <b>{actual}€</b>\n"
+            f"Stake base (2%): <b>{stake_base}€</b>\n\n"
+            f"Para actualizar: /bankroll 1500\n"
+            f"O sube un Excel con el valor en la celda A1.",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        nuevo = float(context.args[0].replace(",", ".").replace("€", "").strip())
+        if nuevo <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("Valor no válido. Ejemplo: /bankroll 1500")
+        return
+
+    set_bankroll(nuevo)
+    stake_base = round(nuevo * 0.02, 2)
+    await update.message.reply_text(
+        f"✅ Bankroll actualizado: <b>{nuevo}€</b>\n"
+        f"Stake base (2%): <b>{stake_base}€</b>",
+        parse_mode="HTML",
+    )
+    logger.info(f"Bankroll actualizado por admin {user.id}: {nuevo}€")
+
+
+async def handler_excel_bankroll(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Procesa un Excel subido en chat privado para actualizar el bankroll.
+    El Excel debe tener el valor en la celda A1 de la primera hoja.
+    Solo admins.
+    """
+    user    = update.effective_user
+    chat    = update.effective_chat
+    message = update.effective_message
+
+    if not user or user.id not in ADMIN_IDS:
+        return
+    if not chat or chat.type != "private":
+        return
+    if not message or not message.document:
+        return
+
+    nombre = message.document.file_name or ""
+    if not nombre.lower().endswith((".xlsx", ".xls")):
+        return
+
+    await message.reply_text("📊 Procesando Excel...")
+
+    try:
+        archivo = await context.bot.get_file(message.document.file_id)
+        ruta    = f"/tmp/bankroll_{user.id}.xlsx"
+        await archivo.download_to_drive(ruta)
+    except Exception as e:
+        logger.error(f"Error descargando Excel de bankroll: {e}")
+        await message.reply_text("❌ Error descargando el archivo.")
+        return
+
+    valor = leer_bankroll_excel(ruta)
+    if valor is None:
+        await message.reply_text(
+            "❌ No se pudo leer el bankroll del Excel.\n"
+            "Asegúrate de que el valor esté en la celda <b>A1</b> de la primera hoja.",
+            parse_mode="HTML",
+        )
+        return
+
+    set_bankroll(valor)
+    stake_base = round(valor * 0.02, 2)
+    await message.reply_text(
+        f"✅ Bankroll actualizado desde Excel: <b>{valor}€</b>\n"
+        f"Stake base (2%): <b>{stake_base}€</b>",
+        parse_mode="HTML",
+    )
+    logger.info(f"Bankroll actualizado desde Excel por admin {user.id}: {valor}€")
