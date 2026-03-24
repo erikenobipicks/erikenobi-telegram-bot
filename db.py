@@ -32,18 +32,24 @@ def init_db() -> None:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS picks (
                     id                BIGSERIAL PRIMARY KEY,
-                    message_id_origen TEXT      NOT NULL UNIQUE,
+                    message_id_origen TEXT         NOT NULL UNIQUE,
                     codigo            TEXT,
-                    tipo_pick         TEXT      NOT NULL,
+                    tipo_pick         TEXT         NOT NULL,
                     liga              TEXT,
                     partido           TEXT,
                     strike_alerta     TEXT,
                     strike_liga       TEXT,
                     resultado         TEXT,
-                    enviado_a_free    BOOLEAN   NOT NULL DEFAULT FALSE,
-                    fecha             DATE      NOT NULL,
-                    fecha_hora        TIMESTAMP NOT NULL DEFAULT NOW()
+                    enviado_a_free    BOOLEAN      NOT NULL DEFAULT FALSE,
+                    odds              NUMERIC(5,2),
+                    fecha             DATE         NOT NULL,
+                    fecha_hora        TIMESTAMP    NOT NULL DEFAULT NOW()
                 );
+            """)
+
+            # Columna odds puede no existir en instalaciones anteriores
+            cur.execute("""
+                ALTER TABLE picks ADD COLUMN IF NOT EXISTS odds NUMERIC(5,2);
             """)
 
             # Índices útiles para filtrar por fecha y tipo
@@ -76,22 +82,6 @@ def init_db() -> None:
                 );
             """)
 
-            # Mensajes publicados — persiste los destinos para poder editar tras reinicios
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS mensajes_publicados (
-                    msg_id_origen    TEXT PRIMARY KEY,
-                    tipo_pick        TEXT NOT NULL,
-                    mensaje_base     TEXT NOT NULL,
-                    mensaje_base_free TEXT NOT NULL,
-                    destinos         TEXT NOT NULL,
-                    fecha            DATE NOT NULL DEFAULT CURRENT_DATE
-                );
-            """)
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_mensajes_fecha
-                ON mensajes_publicados (fecha);
-            """)
-
     logger.info("Base de datos inicializada correctamente.")
 
 
@@ -110,6 +100,7 @@ def db_registrar_pick(
     enviado_a_free: bool,
     fecha: str,
     fecha_hora: str,
+    odds: float | None = None,
 ) -> None:
     try:
         with get_conn() as conn:
@@ -118,14 +109,14 @@ def db_registrar_pick(
                     INSERT INTO picks (
                         message_id_origen, codigo, tipo_pick, liga, partido,
                         strike_alerta, strike_liga, resultado, enviado_a_free,
-                        fecha, fecha_hora
+                        odds, fecha, fecha_hora
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s)
                     ON CONFLICT (message_id_origen) DO NOTHING;
                 """, (
                     message_id_origen, codigo, tipo_pick, liga, partido,
                     strike_alerta, strike_liga, enviado_a_free,
-                    fecha, fecha_hora,
+                    odds, fecha, fecha_hora,
                 ))
         logger.debug(f"Pick guardado en DB: {message_id_origen}")
     except Exception as e:
@@ -317,65 +308,99 @@ def db_stats_por_mes(meses: int = 6) -> list[dict]:
 
 
 # ==============================
-# MENSAJES PUBLICADOS — PERSISTENCIA EN DB
+# STATS PREPARTIDO (mes a mes por estrategia)
 # ==============================
 
-def db_guardar_mensaje_publicado(
-    msg_id_origen: str,
-    tipo_pick: str,
-    mensaje_base: str,
-    mensaje_base_free: str,
-    destinos: dict,
-) -> None:
-    """Guarda el registro de un pick publicado para poder editarlo tras reinicios."""
-    import json
+def db_stats_prepartido_por_mes() -> list[dict]:
+    """
+    Estadísticas de picks prepartido agrupadas por mes y código.
+    Incluye profit y ROI calculados en unidades (stake base = 1u).
+    Solo picks con resultado resuelto.
+    """
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO mensajes_publicados
-                        (msg_id_origen, tipo_pick, mensaje_base, mensaje_base_free, destinos)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (msg_id_origen) DO UPDATE SET
-                        destinos = EXCLUDED.destinos;
-                """, (
-                    msg_id_origen, tipo_pick, mensaje_base,
-                    mensaje_base_free, json.dumps(destinos),
-                ))
-    except Exception as e:
-        logger.error(f"Error guardando mensaje publicado en DB: {e}")
-
-
-def db_cargar_mensajes_publicados() -> dict:
-    """
-    Carga todos los mensajes publicados de hoy desde la DB.
-    Devuelve el mismo formato que STATE['mensajes_publicados'].
-    """
-    import json
-    try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT msg_id_origen, tipo_pick, mensaje_base,
-                           mensaje_base_free, destinos
-                    FROM mensajes_publicados
-                    WHERE fecha = CURRENT_DATE AT TIME ZONE 'Europe/Madrid'
-                    ORDER BY fecha;
+                    SELECT
+                        TO_CHAR(fecha, 'YYYY-MM')                              AS mes,
+                        codigo,
+                        COUNT(*)                                                AS total,
+                        SUM(CASE WHEN resultado = 'HIT'  THEN 1 ELSE 0 END)   AS hits,
+                        SUM(CASE WHEN resultado = 'MISS' THEN 1 ELSE 0 END)   AS misses,
+                        SUM(CASE WHEN resultado = 'VOID' THEN 1 ELSE 0 END)   AS voids,
+                        -- Profit en unidades (mult=1 para simplificar en mes a mes)
+                        SUM(CASE
+                            WHEN resultado = 'HIT'  AND odds IS NOT NULL THEN (odds - 1)
+                            WHEN resultado = 'MISS' AND odds IS NOT NULL THEN -1
+                            ELSE 0
+                        END)                                                    AS profit_units,
+                        SUM(CASE
+                            WHEN resultado IN ('HIT','MISS') AND odds IS NOT NULL THEN 1
+                            ELSE 0
+                        END)                                                    AS picks_con_odds
+                    FROM picks
+                    WHERE codigo ILIKE 'PRE_%'
+                      AND resultado IS NOT NULL
+                    GROUP BY mes, codigo
+                    ORDER BY mes DESC, codigo;
                 """)
-                rows = cur.fetchall()
-
-        resultado = {}
-        for row in rows:
-            resultado[row["msg_id_origen"]] = {
-                "tipo_pick":          row["tipo_pick"],
-                "mensaje_base":       row["mensaje_base"],
-                "mensaje_base_free":  row["mensaje_base_free"],
-                "destinos":           json.loads(row["destinos"]),
-            }
-        return resultado
+                return cur.fetchall()
     except Exception as e:
-        logger.error(f"Error cargando mensajes publicados de DB: {e}")
-        return {}
+        logger.error(f"Error en db_stats_prepartido_por_mes: {e}")
+        return []
+
+
+def db_stats_prepartido_global() -> list[dict]:
+    """
+    Estadísticas globales (todos los meses) de picks prepartido por estrategia.
+    Incluye profit y ROI en unidades con multiplicador real por rango de cuota.
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        codigo,
+                        COUNT(*)                                                AS total,
+                        SUM(CASE WHEN resultado = 'HIT'  THEN 1 ELSE 0 END)   AS hits,
+                        SUM(CASE WHEN resultado = 'MISS' THEN 1 ELSE 0 END)   AS misses,
+                        SUM(CASE WHEN resultado = 'VOID' THEN 1 ELSE 0 END)   AS voids,
+                        -- Profit usando multiplicador por rango de cuota
+                        SUM(CASE
+                            WHEN resultado = 'HIT' AND odds IS NOT NULL THEN
+                                (odds - 1) * CASE
+                                    WHEN odds >= 1.80 AND odds < 1.90 THEN 0.5
+                                    ELSE 1.0
+                                END
+                            WHEN resultado = 'MISS' AND odds IS NOT NULL THEN
+                                -1.0 * CASE
+                                    WHEN odds >= 1.80 AND odds < 1.90 THEN 0.5
+                                    ELSE 1.0
+                                END
+                            ELSE 0
+                        END)                                                    AS profit_units,
+                        SUM(CASE
+                            WHEN resultado IN ('HIT','MISS') AND odds IS NOT NULL THEN
+                                CASE
+                                    WHEN odds >= 1.80 AND odds < 1.90 THEN 0.5
+                                    ELSE 1.0
+                                END
+                            ELSE 0
+                        END)                                                    AS staked_units,
+                        SUM(CASE
+                            WHEN resultado IN ('HIT','MISS') AND odds IS NOT NULL THEN 1
+                            ELSE 0
+                        END)                                                    AS picks_con_odds
+                    FROM picks
+                    WHERE codigo ILIKE 'PRE_%'
+                      AND resultado IS NOT NULL
+                    GROUP BY codigo
+                    ORDER BY codigo;
+                """)
+                return cur.fetchall()
+    except Exception as e:
+        logger.error(f"Error en db_stats_prepartido_global: {e}")
+        return []
 
 
 # ==============================

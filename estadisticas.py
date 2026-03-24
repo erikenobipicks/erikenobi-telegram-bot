@@ -10,6 +10,8 @@ from db import (
     db_calcular_racha_actual,
     db_ya_publicado,
     db_marcar_publicado,
+    db_stats_prepartido_por_mes,
+    db_stats_prepartido_global,
 )
 from config import RESUMENES_CONFIG, RACHA_MINIMA, CANAL_RACHA_ID
 
@@ -26,6 +28,18 @@ def registrar_pick_estadistica(
     tipo_pick: str,
     enviado_a_free: bool = False,
 ) -> None:
+    # Extraer cuota para picks prepartido (PRE_1X usa cuota local = primera de 1X2)
+    odds = None
+    codigo = datos.get("codigo") or ""
+    if codigo.upper().startswith("PRE_"):
+        odds_raw = datos.get("odds_1x2") or ""
+        partes = [p.strip() for p in odds_raw.replace("|", " ").split() if p.strip()]
+        if partes:
+            try:
+                odds = float(partes[0].replace(",", "."))
+            except ValueError:
+                pass
+
     db_registrar_pick(
         message_id_origen = str(message_id_origen),
         codigo            = datos.get("codigo"),
@@ -37,6 +51,7 @@ def registrar_pick_estadistica(
         enviado_a_free    = enviado_a_free,
         fecha             = hoy_str(),
         fecha_hora        = ahora_str(),
+        odds              = odds,
     )
 
 
@@ -341,6 +356,105 @@ async def enviar_resumen_liga_comando(update, liga: str) -> None:
     titulo = f"RESUMEN — Liga: {liga.upper()}"
     texto  = construir_resumen(lista, titulo)
     await update.message.reply_text(texto)
+
+
+async def enviar_resumen_prepartido_comando(update) -> None:
+    """
+    Resumen de picks prepartido con desglose mes a mes por estrategia.
+    Incluye profit en unidades y ROI.
+    Uso: /resumen_pre
+    """
+    _NOMBRES = {
+        "PRE_O25FT": "Over 2.5 FT",
+        "PRE_1X":    "Ganador Local",
+        "PRE_O15FT": "Over 1.5 FT",
+        "PRE_O05FT": "Over 0.5 FT",
+    }
+
+    meses_es = {
+        "01": "Ene", "02": "Feb", "03": "Mar", "04": "Abr",
+        "05": "May", "06": "Jun", "07": "Jul", "08": "Ago",
+        "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dic",
+    }
+
+    global_rows = db_stats_prepartido_global()
+    mes_rows    = db_stats_prepartido_por_mes()
+
+    if not global_rows:
+        await update.message.reply_text("No hay picks prepartido registrados aún.")
+        return
+
+    from collections import defaultdict
+    por_codigo: dict[str, list] = defaultdict(list)
+    for row in mes_rows:
+        por_codigo[row["codigo"]].append(row)
+
+    lineas = ["📊 RESUMEN PREPARTIDO\n"]
+
+    for g in global_rows:
+        codigo    = g["codigo"]
+        nombre    = _NOMBRES.get(codigo, codigo)
+        total     = g["total"]
+        hits      = g["hits"]
+        misses    = g["misses"]
+        voids     = g["voids"]
+        resueltos = hits + misses
+        strike    = round(hits / resueltos * 100, 1) if resueltos > 0 else 0
+
+        # Profit y ROI globales
+        profit_u  = float(g["profit_units"]  or 0)
+        staked_u  = float(g["staked_units"]  or 0)
+        con_odds  = int(g["picks_con_odds"]  or 0)
+        roi       = round(profit_u / staked_u * 100, 1) if staked_u > 0 else 0
+        profit_signo = f"+{profit_u:.2f}" if profit_u >= 0 else f"{profit_u:.2f}"
+        roi_signo    = f"+{roi}%" if roi >= 0 else f"{roi}%"
+        roi_emoji    = "📈" if roi >= 0 else "📉"
+
+        lineas.append("━━━━━━━━━━━━━━━━━━━━")
+        lineas.append(f"📌 {nombre}  ({codigo})")
+        lineas.append(
+            f"Total: {total} | ✅ {hits} | ❌ {misses} | ⚪ {voids} | "
+            f"Strike: {strike}%"
+        )
+        if con_odds > 0:
+            lineas.append(
+                f"{roi_emoji} Profit: {profit_signo}u | ROI: {roi_signo}  "
+                f"<i>({con_odds} picks con cuota)</i>"
+            )
+
+        # Desglose mensual
+        meses = por_codigo.get(codigo, [])
+        if meses:
+            lineas.append("📆 Mes a mes:")
+            for m in meses:
+                mes_key    = m["mes"]
+                nombre_mes = meses_es.get(mes_key[5:], mes_key[5:])
+                h  = m["hits"]
+                mi = m["misses"]
+                v  = m["voids"]
+                res_m   = h + mi
+                strike_m = round(h / res_m * 100, 1) if res_m > 0 else 0
+                pend_m   = m["total"] - res_m - v
+                pend_txt = f" ⏳{pend_m}" if pend_m > 0 else ""
+
+                # Profit mensual
+                p_u = float(m["profit_units"] or 0)
+                c_o = int(m["picks_con_odds"] or 0)
+                if c_o > 0:
+                    p_signo = f"+{p_u:.2f}u" if p_u >= 0 else f"{p_u:.2f}u"
+                    profit_txt = f" | {p_signo}"
+                else:
+                    profit_txt = ""
+
+                lineas.append(
+                    f"  {nombre_mes} {mes_key[:4]}: "
+                    f"✅{h} ❌{mi} ⚪{v}{pend_txt} "
+                    f"→ {strike_m}%{profit_txt}"
+                )
+
+        lineas.append("")
+
+    await update.message.reply_text("\n".join(lineas), parse_mode="HTML")
 
 
 async def enviar_resumen_codigo_comando(update, codigo: str) -> None:
