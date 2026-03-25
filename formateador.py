@@ -43,11 +43,11 @@ def _subtitulo(datos: dict, tipo_pick: str) -> str:
         if "1X" in linea.upper() or "1X" in modo.upper():
             return "GANADOR LOCAL"
         if "OVER2.5" in linea.upper() or "OVER2.5" in modo.upper():
-            return "OVER 2.5 FT"
+            return "+2.5 GOLES EN TODO EL PARTIDO"
         if "OVER1.5" in linea.upper() or "OVER1.5" in modo.upper():
-            return "OVER 1.5 FT"
+            return "+1.5 GOLES EN TODO EL PARTIDO"
         if "OVER0.5" in linea.upper() or "OVER0.5" in modo.upper():
-            return "OVER 0.5 FT"
+            return "+0.5 GOLES EN TODO EL PARTIDO"
         # Fallback PRE
         return "PREPARTIDO"
 
@@ -59,10 +59,13 @@ def _subtitulo(datos: dict, tipo_pick: str) -> str:
             if "0.5" in linea:
                 return "ASIÁTICA 0.5/1 CÓRNER"
             return "ASIÁTICA CÓRNER"
+        if modo == "+1" or "+1" in linea:
+            return "CÓRNER MÁS"
         if "SINGLE" in modo:
-            if "+1" in linea:
-                return "CÓRNER MÁS"
-            return "CÓRNER"
+            return "CÓRNER MÁS"
+        if modo.startswith("OVER"):
+            val = modo.replace("OVER", "").strip()
+            return f"OVER {val} CÓRNERS"
         if "OVER" in modo or "OVER" in linea:
             return f"OVER {linea} CÓRNERS"
         return "CÓRNER"
@@ -81,14 +84,25 @@ def _subtitulo(datos: dict, tipo_pick: str) -> str:
         sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "PARTIDO"
         return f"ASIÁTICA GOL {sufijo}"
 
+    # OVER0.5, OVER1.5… el valor está en el modo, no en linea
+    if modo.startswith("OVER"):
+        val    = modo.replace("OVER", "").strip()
+        sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "FT"
+        return f"OVER {val} GOL {sufijo}"
+
     if "OVER" in modo:
         sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "FT"
         return f"OVER {linea} GOL {sufijo}"
 
+    if modo == "+1":
+        sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "PARTIDO"
+        return f"ASIÁTICA +1 GOL {sufijo}"
+
     if "SINGLE" in modo:
-        if "OVER" in linea:
+        if "OVER" in linea.upper():
+            val    = linea.upper().replace("OVER", "").strip()
             sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "FT"
-            return f"OVER {linea.replace('OVER','')} GOL {sufijo}"
+            return f"OVER {val} GOL {sufijo}"
         sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "FT"
         return f"GOL {sufijo}"
 
@@ -128,11 +142,7 @@ def _cuota_local(odds_raw: str | None) -> str | None:
 
 def _titulo_visible(datos: dict, tipo_pick: str) -> str:
     """
-    Construye la primera línea del mensaje: emoji + mercado + partido
-    Ejemplos:
-      ⚽ Over 0.5 HT | Hawassa City FC vs Lideta Sub City
-      🚩 Asiática +1 FT | Arsenal vs Chelsea
-      ⚽ Over 2.5 FT | Juarez FC vs Tigres UANL  (prepartido)
+    Construye la primera línea del mensaje: emoji + mercado + partido.
     """
     emoji   = "⚽" if tipo_pick == "gol" else "🚩"
     partido = datos.get("partido") or ""
@@ -141,7 +151,7 @@ def _titulo_visible(datos: dict, tipo_pick: str) -> str:
     linea   = detectar_linea_por_codigo(datos) or ""
     fase    = detectar_fase_por_codigo(datos) or ""
 
-    # Determinar mercado legible para el título
+    # ── PREPARTIDO ────────────────────────────────────────────────────
     if fase == "PRE":
         linea_up = linea.upper()
         if "1X" in linea_up:
@@ -154,22 +164,55 @@ def _titulo_visible(datos: dict, tipo_pick: str) -> str:
             mercado = "Over 0.5 FT"
         else:
             mercado = "Prepartido"
+
+    # ── LIVE — NEXTGOAL (UGM, NG1…) ──────────────────────────────────
+    # linea puede ser "ODDS1.60" o un número → siempre "Over 0.5"
     elif modo == "NEXTGOAL":
         mercado = f"Over 0.5 {periodo}"
+
+    # ── LIVE — ASIAN ──────────────────────────────────────────────────
     elif "ASIAN" in modo:
         if "+1" in linea:
             mercado = f"Línea 1 {periodo}"
-        elif "0.5" in linea:
+        elif "0.5" in linea and "1" in linea:
             mercado = f"GOAL {periodo}"
         else:
             mercado = f"Asiática {periodo}"
-    elif "OVER" in modo:
-        mercado = f"Over {linea} {periodo}"
-    elif "SINGLE" in modo and "OVER" in linea.upper():
-        val = linea.upper().replace("OVER", "").strip()
+
+    # ── LIVE — OVER0.5 / OVER (modo contiene el valor) ───────────────
+    elif modo.startswith("OVER"):
+        # modo = "OVER0.5" → extraer "0.5"
+        val = modo.replace("OVER", "").strip() or linea
         mercado = f"Over {val} {periodo}"
+
+    # ── LIVE — SINGLE ─────────────────────────────────────────────────
+    elif "SINGLE" in modo:
+        if tipo_pick == "corner":
+            if "+1" in linea:
+                mercado = f"Córner +1 {periodo}"
+            elif linea:
+                mercado = f"Córner {linea} {periodo}"
+            else:
+                mercado = f"Córner {periodo}"
+        else:
+            # SINGLE gol — linea puede ser "OVER2.5", "+1", etc.
+            if "OVER" in linea.upper():
+                val = linea.upper().replace("OVER", "").strip()
+                mercado = f"Over {val} {periodo}"
+            elif "+1" in linea:
+                mercado = f"Línea 1 {periodo}"
+            elif linea:
+                mercado = f"Gol {linea} {periodo}"
+            else:
+                mercado = f"Gol {periodo}"
+
+    # ── +1 directo (CH2…) ─────────────────────────────────────────────
+    elif modo == "+1":
+        mercado = f"Línea 1 {periodo}" if tipo_pick == "gol" else f"Córner +1 {periodo}"
+
+    # ── Fallback ──────────────────────────────────────────────────────
     else:
-        mercado = periodo or "Gol"
+        mercado = f"{'Gol' if tipo_pick == 'gol' else 'Córner'} {periodo}".strip()
 
     if partido:
         return f"{emoji} {mercado} | {partido}"
@@ -208,14 +251,15 @@ def _bloque_stats_live(datos: dict) -> list[str]:
 # ══════════════════════════════════════════════════════════════════════
 
 def _construir_live(datos: dict, tipo_pick: str, para_free: bool) -> str:
-    subtitulo = _subtitulo(datos, tipo_pick)
-    titulo    = _titulo_visible(datos, tipo_pick)
-    picks     = datos.get("picks")
-    liga      = datos.get("liga")
-    partido   = datos.get("partido")
-    odds      = _formatear_odds(datos.get("odds_1x2"))
-    s_alerta  = datos.get("strike_alerta")
-    s_liga    = datos.get("strike_liga")
+    subtitulo  = _subtitulo(datos, tipo_pick)
+    titulo     = _titulo_visible(datos, tipo_pick)
+    picks      = datos.get("picks")
+    liga       = datos.get("liga")
+    partido    = datos.get("partido")
+    odds       = _formatear_odds(datos.get("odds_1x2"))
+    s_alerta   = datos.get("strike_alerta")
+    s_liga     = datos.get("strike_liga")
+    modo       = detectar_modo_por_codigo(datos) or ""
 
     lineas = []
     lineas.append(f"<b>{titulo}</b>")
@@ -237,7 +281,15 @@ def _construir_live(datos: dict, tipo_pick: str, para_free: bool) -> str:
         lineas.append("")
         lineas.extend(stats)
 
-    # Cuotas prepartido
+    # Cuota del siguiente gol (Over 0.5) para picks NEXTGOAL FT
+    if modo == "NEXTGOAL" and tipo_pick == "gol":
+        odds_05_raw = datos.get("odds_over_0_5")
+        if odds_05_raw:
+            partes = odds_05_raw.split()
+            if partes:
+                lineas.append(f"💰 Cuota siguiente gol: <b>{partes[0]}</b>")
+
+    # Cuotas prepartido 1X2
     if odds:
         lineas.append(f"📊 Cuotas prepartido 1X2: {odds}")
 
@@ -288,19 +340,31 @@ def _construir_pre(datos: dict, tipo_pick: str) -> str:
 
     lineas.append("")
 
-    # Cuota local si es pick de ganador local
+    # ── Ganador Local: cuota 1X2 local + stake ────────────────────────
     if "1X" in linea.upper():
         cuota_local = _cuota_local(odds_raw)
         if cuota_local:
             lineas.append(f"💰 Cuota local: <b>{cuota_local}</b>")
-            # Stake recomendado
             linea_stake = construir_linea_stake_pre(cuota_local)
             if linea_stake:
                 lineas.append(linea_stake)
+        if odds:
+            lineas.append(f"📊 Cuotas 1X2: {odds}")
 
-    # Cuotas 1X2 completas
-    if odds:
-        lineas.append(f"📊 Cuotas 1X2: {odds}")
+    # ── Over 2.5 FT: cuota over 2.5 prepartido ────────────────────────
+    elif "OVER2.5" in linea.upper():
+        odds_25_raw = datos.get("odds_over_2_5")
+        if odds_25_raw:
+            partes = odds_25_raw.split()
+            if partes:
+                lineas.append(f"💰 Cuota Over 2.5: <b>{partes[0]}</b>")
+        if odds:
+            lineas.append(f"📊 Cuotas 1X2: {odds}")
+
+    # ── Resto de prepartidos: solo 1X2 ───────────────────────────────
+    else:
+        if odds:
+            lineas.append(f"📊 Cuotas 1X2: {odds}")
 
     # Aciertos
     lineas.append("")

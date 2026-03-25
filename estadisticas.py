@@ -28,11 +28,16 @@ def registrar_pick_estadistica(
     tipo_pick: str,
     enviado_a_free: bool = False,
 ) -> None:
-    # Extraer cuota para picks prepartido (PRE_1X usa cuota local = primera de 1X2)
+    # Extraer cuota para picks prepartido
+    # PRE_1X  → primera cuota de 1X2 (cuota local)
+    # PRE_O25FT → primera cuota de Over/Under 2.50 (cuota over 2.5)
     odds = None
     codigo = datos.get("codigo") or ""
     if codigo.upper().startswith("PRE_"):
-        odds_raw = datos.get("odds_1x2") or ""
+        if "O25" in codigo.upper() or "OVER2.5" in codigo.upper():
+            odds_raw = datos.get("odds_over_2_5") or ""
+        else:
+            odds_raw = datos.get("odds_1x2") or ""
         partes = [p.strip() for p in odds_raw.replace("|", " ").split() if p.strip()]
         if partes:
             try:

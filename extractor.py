@@ -39,6 +39,8 @@ def extraer_datos(texto: str) -> dict:
         "momentum": None,
         "red_cards": None,
         "odds_1x2": None,
+        "odds_over_0_5": None,
+        "odds_over_2_5": None,
         "strike_alerta": None,
         "strike_liga": None,
         "resultado": None,
@@ -168,10 +170,20 @@ def extraer_datos(texto: str) -> dict:
         if m:
             datos[campo] = m.group(1).strip()
 
-    # Odds (el valor está en la línea siguiente al label)
+    # Odds 1X2 (el valor está en la línea siguiente al label)
     m = re.search(r"1X2 Pre-Match Odds:\s*\n([^\n]+)", texto, re.IGNORECASE)
     if m:
         datos["odds_1x2"] = m.group(1).strip()
+
+    # Over/Under 0.50 Odds (siguiente gol)
+    m = re.search(r"Over/Under 0\.50 Odds:\s*\n([^\n]+)", texto, re.IGNORECASE)
+    if m:
+        datos["odds_over_0_5"] = m.group(1).strip()
+
+    # Over/Under 2.50 Odds
+    m = re.search(r"Over/Under 2\.50 Odds:\s*\n([^\n]+)", texto, re.IGNORECASE)
+    if m:
+        datos["odds_over_2_5"] = m.group(1).strip()
 
     # --- Resultado: solo se acepta como palabra completa para evitar falsos positivos ---
     texto_up = texto.upper()

@@ -129,10 +129,19 @@ def calcular_stake_1x(cuota_local: float) -> dict | None:
     }
 
 
+# Niveles de stake visibles al usuario
+# mult 0.5 → "Stake 1"  (rango problemático, stake reducido)
+# mult 1.0 → "Stake 2"  (stake normal)
+_NIVEL_STAKE = {
+    0.5: "Stake 1",
+    1.0: "Stake 2",
+}
+
+
 def construir_linea_stake_pre(cuota_local_str: str | None) -> str:
     """
     Devuelve la línea HTML lista para insertar en el mensaje de Telegram.
-    Ejemplo: "💰 Stake: <b>10.00€</b>  ×0.5"
+    Ejemplo: "📊 Stake 2"  o  "📊 Stake 1  <i>(cuota en rango reducido)</i>"
     Devuelve cadena vacía si no aplica.
     """
     if not cuota_local_str:
@@ -146,6 +155,9 @@ def construir_linea_stake_pre(cuota_local_str: str | None) -> str:
     if not resultado:
         return ""
 
-    mult = resultado["multiplicador"]
-    mult_txt = f"  <i>(×{mult})</i>" if mult != 1.0 else ""
-    return f"💰 Stake: <b>{resultado['stake']}€</b>{mult_txt}"
+    mult  = resultado["multiplicador"]
+    nivel = _NIVEL_STAKE.get(mult, f"×{mult}")
+
+    if mult < 1.0:
+        return f"📊 {nivel}  <i>(rango de cuota reducido)</i>"
+    return f"📊 {nivel}"
