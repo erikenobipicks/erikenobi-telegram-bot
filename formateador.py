@@ -251,6 +251,110 @@ def _bloque_stats_live(datos: dict) -> list[str]:
     return lineas
 
 
+def _linea_entrada_gol(datos: dict) -> str | None:
+    """
+    Construye la línea de entrada sugerida para picks de gol.
+    Calcula el número concreto cuando hay stats en vivo.
+    Ejemplos:
+      UGM NEXTGOAL 1-1 → "Entrada: Over 2.5 goles FT"
+      CM02v2 ASIAN +1 HT 0-0 → "Entrada: Over 0.5 goles 1ª mitad"
+      CM07v2 ASIAN +1 FT 1-0 → "Entrada: Over 1.5 goles FT"
+      GFT1 ASIAN 0.5-1 0-0 → "Entrada: Asian 0.5/1 goles FT"
+      LJ3 OVER0.5 HT → "Entrada: Over 0.5 goles 1ª mitad"
+    """
+    modo    = detectar_modo_por_codigo(datos) or ""
+    linea   = detectar_linea_por_codigo(datos) or ""
+    periodo = detectar_periodo_por_codigo(datos) or ""
+    sufijo  = "1ª mitad" if periodo == "HT" else "FT"
+
+    # Leer goles actuales del partido
+    goles_raw = datos.get("goles") or ""
+    total_goles = None
+    if goles_raw:
+        partes = [p.strip() for p in goles_raw.replace("-", " ").split() if p.strip().isdigit()]
+        if len(partes) >= 2:
+            try:
+                total_goles = int(partes[0]) + int(partes[1])
+            except ValueError:
+                pass
+
+    # NEXTGOAL — siguiente gol del partido
+    if modo == "NEXTGOAL":
+        if total_goles is not None:
+            over_line = total_goles + 0.5
+            return f"🎯 Entrada: Over {over_line} goles {sufijo}"
+        return f"🎯 Entrada: Over 0.5 goles {sufijo}"
+
+    # ASIAN +1 — un gol más a partir del marcador actual
+    if "ASIAN" in modo and "+1" in linea:
+        if total_goles is not None:
+            over_line = total_goles + 0.5
+            return f"🎯 Entrada: Asian +1 {sufijo} (over {over_line} goles)"
+        return f"🎯 Entrada: Asian +1 goles {sufijo}"
+
+    # ASIAN 0.5-1 o 0.5/1 — línea asiática mixta
+    if "ASIAN" in modo and ("0.5" in linea and "1" in linea):
+        return f"🎯 Entrada: Asian 0.5/1 goles {sufijo}"
+
+    # OVER0.5, OVER1.5… valor en el modo
+    if modo.startswith("OVER"):
+        val = modo.replace("OVER", "").strip()
+        return f"🎯 Entrada: Over {val} goles {sufijo}"
+
+    return None
+
+
+def _linea_entrada_corner(datos: dict) -> str | None:
+    """
+    Construye la línea de entrada sugerida para picks de corner.
+    Calcula el número concreto de córners cuando hay stats en vivo.
+    Ejemplos:
+      CF3 SINGLE +1 FT  → corners actuales 6+2=8 → "Entrada: Asian +1 FT (over 9.5)"
+      CH3 ASIAN  +1 HT  → corners actuales 2+1=3 → "Entrada: Asian +1 HT (over 3.5)"
+      CH10 OVER0.5 HT   → "Entrada: Over 0.5 córners 1ª mitad"
+    """
+    modo    = detectar_modo_por_codigo(datos) or ""
+    linea   = detectar_linea_por_codigo(datos) or ""
+    periodo = detectar_periodo_por_codigo(datos) or ""
+    sufijo  = "1ª mitad" if periodo == "HT" else "partido"
+
+    # Intentar leer córners actuales del partido
+    corners_raw = datos.get("corners") or ""
+    total_corners = None
+    if corners_raw:
+        partes = [p.strip() for p in corners_raw.replace("-", " ").split() if p.strip().isdigit()]
+        if len(partes) >= 2:
+            try:
+                total_corners = int(partes[0]) + int(partes[1])
+            except ValueError:
+                pass
+
+    # ASIAN +1 o SINGLE +1
+    if "+1" in linea or modo == "+1" or ("SINGLE" in modo and "+1" in linea):
+        if total_corners is not None:
+            over_line = total_corners + 0.5
+            return f"🎯 Entrada: Asian +1 {sufijo} (over {over_line} córners)"
+        return f"🎯 Entrada: Asian +1 córners {sufijo}"
+
+    # SINGLE con +1 en modo
+    if "SINGLE" in modo:
+        if total_corners is not None:
+            over_line = total_corners + 0.5
+            return f"🎯 Entrada: Córner +1 {sufijo} (over {over_line})"
+        return f"🎯 Entrada: Córner +1 {sufijo}"
+
+    # OVER0.5, OVER1.5…
+    if modo.startswith("OVER"):
+        val = modo.replace("OVER", "").strip()
+        return f"🎯 Entrada: Over {val} córners {sufijo}"
+
+    # ASIAN con otro valor en linea
+    if "ASIAN" in modo:
+        return f"🎯 Entrada: Asian {linea} córners {sufijo}"
+
+    return None
+
+
 # ══════════════════════════════════════════════════════════════════════
 # MENSAJE BASE — LIVE
 # ══════════════════════════════════════════════════════════════════════
@@ -285,6 +389,18 @@ def _construir_live(datos: dict, tipo_pick: str, para_free: bool) -> str:
     if stats:
         lineas.append("")
         lineas.extend(stats)
+
+    # Línea de entrada para corners
+    if tipo_pick == "corner":
+        entrada = _linea_entrada_corner(datos)
+        if entrada:
+            lineas.append(entrada)
+
+    # Línea de entrada para goles
+    if tipo_pick == "gol":
+        entrada = _linea_entrada_gol(datos)
+        if entrada:
+            lineas.append(entrada)
 
     # Cuota del siguiente gol (Over 0.5) para picks NEXTGOAL FT
     if modo == "NEXTGOAL" and tipo_pick == "gol":
