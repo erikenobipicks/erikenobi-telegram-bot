@@ -21,7 +21,6 @@ from extractor import (
     detectar_modo_por_codigo,
     detectar_linea_por_codigo,
 )
-from utils import parse_marcador_total
 
 logger = logging.getLogger(__name__)
 
@@ -33,15 +32,13 @@ logger = logging.getLogger(__name__)
 def _subtitulo(datos: dict, tipo_pick: str) -> str:
     """
     Devuelve el subtítulo legible de la alerta según el mercado y período.
-    Para picks live incluye la línea de entrada dinámica calculada
-    a partir del marcador actual.
     """
     fase    = detectar_fase_por_codigo(datos) or ""
     periodo = detectar_periodo_por_codigo(datos) or ""
     modo    = detectar_modo_por_codigo(datos) or ""
     linea   = detectar_linea_por_codigo(datos) or ""
 
-    # ── PREPARTIDO — sin línea dinámica ───────────────────────────────
+    # ── PREPARTIDO ────────────────────────────────────────────────────
     if fase == "PRE":
         if "1X" in linea.upper() or "1X" in modo.upper():
             return "GANADOR LOCAL"
@@ -51,72 +48,70 @@ def _subtitulo(datos: dict, tipo_pick: str) -> str:
             return "+1.5 GOLES EN TODO EL PARTIDO"
         if "OVER0.5" in linea.upper() or "OVER0.5" in modo.upper():
             return "+0.5 GOLES EN TODO EL PARTIDO"
+        # Fallback PRE
         return "PREPARTIDO"
-
-    # ── LIVE: calcular línea de entrada dinámica ──────────────────────
-    linea_din = _linea_entrada_dinamica(datos, tipo_pick)
-
-    def _con_entrada(texto_mercado: str) -> str:
-        """Adjunta la línea dinámica al mercado si está disponible."""
-        if linea_din:
-            return f"{texto_mercado}\n{linea_din}"
-        return texto_mercado
 
     # ── LIVE — CORNERS ────────────────────────────────────────────────
     if tipo_pick == "corner":
         if "ASIAN" in modo:
             if "+1" in linea:
-                return _con_entrada("ASIÁTICA +1 CÓRNER PARTIDO")
+                sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "PARTIDO"
+                return f"ASIÁTICA +1 CÓRNER {sufijo}"
             if "0.5" in linea:
-                return _con_entrada("ASIÁTICA 0.5/1 CÓRNER")
-            return _con_entrada("ASIÁTICA CÓRNER")
+                return "ASIÁTICA 0.5/1 CÓRNER"
+            return "ASIÁTICA CÓRNER"
         if modo == "+1" or "+1" in linea:
-            return _con_entrada("CÓRNER MÁS")
+            sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "FT"
+            return f"CÓRNER MÁS {sufijo}"
         if "SINGLE" in modo:
-            return _con_entrada("CÓRNER MÁS")
+            sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "FT"
+            return f"CÓRNER MÁS {sufijo}"
         if modo.startswith("OVER"):
-            val = modo.replace("OVER", "").strip()
-            return _con_entrada(f"OVER {val} CÓRNERS")
+            val    = modo.replace("OVER", "").strip()
+            sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "FT"
+            return f"OVER {val} CÓRNERS {sufijo}"
         if "OVER" in modo or "OVER" in linea:
-            return _con_entrada(f"OVER {linea} CÓRNERS")
-        return _con_entrada("CÓRNER")
+            sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "FT"
+            return f"OVER {linea} CÓRNERS {sufijo}"
+        return "CÓRNER"
 
     # ── LIVE — GOLES ──────────────────────────────────────────────────
     if modo == "NEXTGOAL":
-        return _con_entrada("UN GOL MÁS")
+        return "UN GOL MÁS"
 
     if "ASIAN" in modo:
         if "+1" in linea:
             sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "PARTIDO"
-            return _con_entrada(f"ASIÁTICA +1 GOL {sufijo}")
+            return f"ASIÁTICA +1 GOL {sufijo}"
         if "0.5" in linea and "1" in linea:
             sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "PARTIDO"
-            return _con_entrada(f"ASIÁTICA 0.5/1 GOL {sufijo}")
+            return f"ASIÁTICA 0.5/1 GOL {sufijo}"
         sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "PARTIDO"
-        return _con_entrada(f"ASIÁTICA GOL {sufijo}")
+        return f"ASIÁTICA GOL {sufijo}"
 
+    # OVER0.5, OVER1.5… el valor está en el modo, no en linea
     if modo.startswith("OVER"):
         val    = modo.replace("OVER", "").strip()
         sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "FT"
-        return _con_entrada(f"OVER {val} GOL {sufijo}")
+        return f"OVER {val} GOL {sufijo}"
 
     if "OVER" in modo:
         sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "FT"
-        return _con_entrada(f"OVER {linea} GOL {sufijo}")
+        return f"OVER {linea} GOL {sufijo}"
 
     if modo == "+1":
         sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "PARTIDO"
-        return _con_entrada(f"ASIÁTICA +1 GOL {sufijo}")
+        return f"ASIÁTICA +1 GOL {sufijo}"
 
     if "SINGLE" in modo:
         if "OVER" in linea.upper():
             val    = linea.upper().replace("OVER", "").strip()
             sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "FT"
-            return _con_entrada(f"OVER {val} GOL {sufijo}")
+            return f"OVER {val} GOL {sufijo}"
         sufijo = "EN LA 1ª MITAD" if periodo == "HT" else "FT"
-        return _con_entrada(f"GOL {sufijo}")
+        return f"GOL {sufijo}"
 
-    return _con_entrada("GOL")
+    return "GOL"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -144,108 +139,6 @@ def _cuota_local(odds_raw: str | None) -> str | None:
     partes = re.split(r"[\s|]+", odds_raw.strip())
     partes = [p for p in partes if p]
     return partes[0] if partes else None
-
-
-# ══════════════════════════════════════════════════════════════════════
-# LÍNEA DE ENTRADA Y ENTRADA DOBLE — PICKS LIVE
-# ══════════════════════════════════════════════════════════════════════
-
-def _total_actual(datos: dict, tipo_pick: str) -> int | None:
-    """
-    Devuelve el total actual del marcador relevante para el tipo de pick:
-      - corners → suma del marcador de córners ("4-3" → 7)
-      - gol     → suma del marcador de goles   ("2-1" → 3)
-    Devuelve None si no hay dato o no parsea.
-    """
-    if tipo_pick == "corner":
-        return parse_marcador_total(datos.get("corners") or "")
-    return parse_marcador_total(datos.get("goles") or "")
-
-
-def _linea_entrada_dinamica(datos: dict, tipo_pick: str) -> str | None:
-    """
-    Calcula la línea de entrada real según el marcador actual y el tipo de alerta.
-
-    Lógica:
-      • Alerta "+1" / ASIÁTICA +1 / SINGLE+1  → entrada = total_actual + 1
-        Ejemplo corners: llevan 5 → "Entrada línea 6"
-        Ejemplo goles:   llevan 2 → "Entrada línea 3"
-
-      • Alerta NEXTGOAL / OVER0.5 live         → entrada = total_actual + 0.5
-        Ejemplo: llevan 1 gol → "Entrada línea 1.5"
-
-      • Alerta OVER N (modo=OVERx.x)          → línea fija = x.x (ya viene en el código)
-        No se recalcula; la línea está implícita en el mercado.
-
-    Devuelve None si no hay suficientes datos para calcular.
-    """
-    modo  = detectar_modo_por_codigo(datos) or ""
-    linea = detectar_linea_por_codigo(datos) or ""
-    total = _total_actual(datos, tipo_pick)
-
-    if total is None:
-        return None
-
-    # +1 / SINGLE+1 / ASIAN+1 → línea entera
-    es_mas1 = (
-        modo == "+1"
-        or "+1" in linea
-        or ("ASIAN" in modo and "+1" in linea)
-        or ("SINGLE" in modo and "+1" in linea)
-    )
-    if es_mas1:
-        entrada = total + 1
-        unidad  = "córners" if tipo_pick == "corner" else "goles"
-        return f"➡️ Entrada línea <b>{entrada} {unidad}</b>  <i>(ahora: {total})</i>"
-
-    # NEXTGOAL / OVER0.5 live → línea con decimales
-    es_over05 = (
-        modo == "NEXTGOAL"
-        or modo == "OVER0.5"
-        or (modo.startswith("OVER") and "0.5" in modo)
-        or ("SINGLE" in modo and "OVER0.5" in linea.upper())
-    )
-    if es_over05:
-        entrada = total + 0.5
-        unidad  = "córners" if tipo_pick == "corner" else "goles"
-        return f"➡️ Entrada línea <b>{entrada} {unidad}</b>  <i>(ahora: {total})</i>"
-
-    return None
-
-
-def _entrada_doble_over05(datos: dict, tipo_pick: str) -> str | None:
-    """
-    Sugiere una entrada doble Over +0.5 cuando la alerta principal es +1 o ASIAN+1.
-    La entrada doble es siempre total_actual + 0.5.
-
-    Ejemplo: alerta +1 córners, llevan 5 → principal es línea 6,
-             entrada doble: Over 5.5 córners.
-
-    Solo se muestra cuando el pick principal ya es +1 (no para OVER fijos).
-    Devuelve None si no aplica o no hay datos.
-    """
-    modo  = detectar_modo_por_codigo(datos) or ""
-    linea = detectar_linea_por_codigo(datos) or ""
-    total = _total_actual(datos, tipo_pick)
-
-    if total is None:
-        return None
-
-    es_mas1 = (
-        modo == "+1"
-        or "+1" in linea
-        or ("ASIAN" in modo and "+1" in linea)
-        or ("SINGLE" in modo and "+1" in linea)
-    )
-    if not es_mas1:
-        return None
-
-    entrada_doble = total + 0.5
-    unidad = "córners" if tipo_pick == "corner" else "goles"
-    return (
-        f"⚡ Entrada doble: Over <b>{entrada_doble} {unidad}</b>"
-        f"  <i>(más segura, menor cuota)</i>"
-    )
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -392,11 +285,6 @@ def _construir_live(datos: dict, tipo_pick: str, para_free: bool) -> str:
     if stats:
         lineas.append("")
         lineas.extend(stats)
-
-    # Entrada doble Over +0.5 (solo cuando la alerta es +1 y hay marcador)
-    entrada_doble = _entrada_doble_over05(datos, tipo_pick)
-    if entrada_doble:
-        lineas.append(entrada_doble)
 
     # Cuota del siguiente gol (Over 0.5) para picks NEXTGOAL FT
     if modo == "NEXTGOAL" and tipo_pick == "gol":
