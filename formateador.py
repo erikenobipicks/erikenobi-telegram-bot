@@ -281,14 +281,15 @@ def _linea_entrada_gol(datos: dict) -> str | None:
     # NEXTGOAL — siguiente gol del partido
     if modo == "NEXTGOAL":
         if total_goles is not None:
-            over_line = total_goles + 0.5
+            # Con 0 goles → over 0.5, con 1+ → número entero
+            over_line = f"{total_goles + 0.5}" if total_goles == 0 else str(total_goles + 1)
             return f"🎯 Entrada: Over {over_line} goles {sufijo}"
         return f"🎯 Entrada: Over 0.5 goles {sufijo}"
 
     # ASIAN +1 — un gol más a partir del marcador actual
     if "ASIAN" in modo and "+1" in linea:
         if total_goles is not None:
-            over_line = total_goles + 0.5
+            over_line = f"{total_goles + 0.5}" if total_goles == 0 else str(total_goles + 1)
             return f"🎯 Entrada: Asian +1 {sufijo} (over {over_line} goles)"
         return f"🎯 Entrada: Asian +1 goles {sufijo}"
 
@@ -329,18 +330,18 @@ def _linea_entrada_corner(datos: dict) -> str | None:
             except ValueError:
                 pass
 
-    # ASIAN +1 o SINGLE +1
-    if "+1" in linea or modo == "+1" or ("SINGLE" in modo and "+1" in linea):
+    # ASIAN +1
+    if "ASIAN" in modo and "+1" in linea:
         if total_corners is not None:
-            over_line = total_corners + 0.5
+            over_line = total_corners + 1
             return f"🎯 Entrada: Asian +1 {sufijo} (over {over_line} córners)"
         return f"🎯 Entrada: Asian +1 córners {sufijo}"
 
-    # SINGLE con +1 en modo
-    if "SINGLE" in modo:
+    # SINGLE +1 o modo +1 directo
+    if modo == "+1" or ("SINGLE" in modo and "+1" in linea):
         if total_corners is not None:
-            over_line = total_corners + 0.5
-            return f"🎯 Entrada: Córner +1 {sufijo} (over {over_line})"
+            over_line = total_corners + 1
+            return f"🎯 Entrada: Córner +1 {sufijo} (over {over_line} córners)"
         return f"🎯 Entrada: Córner +1 {sufijo}"
 
     # OVER0.5, OVER1.5…
