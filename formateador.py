@@ -305,21 +305,17 @@ def _linea_entrada_gol(datos: dict) -> str | None:
     return None
 
 
-def _linea_entrada_corner(datos: dict) -> str | None:
+def _linea_entrada_corner(datos: dict) -> list[str]:
     """
-    Construye la línea de entrada sugerida para picks de corner.
-    Calcula el número concreto de córners cuando hay stats en vivo.
-    Ejemplos:
-      CF3 SINGLE +1 FT  → corners actuales 6+2=8 → "Entrada: Asian +1 FT (over 9.5)"
-      CH3 ASIAN  +1 HT  → corners actuales 2+1=3 → "Entrada: Asian +1 HT (over 3.5)"
-      CH10 OVER0.5 HT   → "Entrada: Over 0.5 córners 1ª mitad"
+    Devuelve 1-2 líneas de entrada para corners, al estilo:
+      🎯 Buscar 1 córner más en el partido
+      🎯 Entrada sugerida: línea 6 córners FT
     """
     modo    = detectar_modo_por_codigo(datos) or ""
     linea   = detectar_linea_por_codigo(datos) or ""
     periodo = detectar_periodo_por_codigo(datos) or ""
-    sufijo  = "1ª mitad" if periodo == "HT" else "partido"
+    sufijo  = "1ª mitad" if periodo == "HT" else "FT"
 
-    # Intentar leer córners actuales del partido
     corners_raw = datos.get("corners") or ""
     total_corners = None
     if corners_raw:
@@ -330,35 +326,144 @@ def _linea_entrada_corner(datos: dict) -> str | None:
             except ValueError:
                 pass
 
-    # ASIAN +1
-    if "ASIAN" in modo and "+1" in linea:
+    # ASIAN +1 o SINGLE +1 — buscar 1 córner más
+    if ("ASIAN" in modo and "+1" in linea) or modo == "+1" or ("SINGLE" in modo and "+1" in linea):
+        mercado = "Asian +1" if "ASIAN" in modo else "Córner +1"
+        accion  = "1ª mitad" if periodo == "HT" else "partido"
+        buscar  = f"🎯 Buscar 1 córner más en el {accion}"
         if total_corners is not None:
-            over_line = total_corners + 1
-            return f"🎯 Entrada: Asian +1 {sufijo} (over {over_line} córners)"
-        return f"🎯 Entrada: Asian +1 córners {sufijo}"
-
-    # SINGLE +1 o modo +1 directo
-    if modo == "+1" or ("SINGLE" in modo and "+1" in linea):
-        if total_corners is not None:
-            over_line = total_corners + 1
-            return f"🎯 Entrada: Córner +1 {sufijo} (over {over_line} córners)"
-        return f"🎯 Entrada: Córner +1 {sufijo}"
+            linea_num = total_corners + 1
+            entrada = f"🎯 Entrada sugerida: línea {linea_num} córners {sufijo}"
+        else:
+            entrada = f"🎯 Entrada sugerida: {mercado} córners {sufijo}"
+        return [buscar, entrada]
 
     # OVER0.5, OVER1.5…
     if modo.startswith("OVER"):
-        val = modo.replace("OVER", "").strip()
-        return f"🎯 Entrada: Over {val} córners {sufijo}"
+        val    = modo.replace("OVER", "").strip()
+        accion = "1ª mitad" if periodo == "HT" else "partido"
+        return [f"🎯 Entrada sugerida: over {val} córners {sufijo}"]
 
-    # ASIAN con otro valor en linea
+    # ASIAN con valor distinto
     if "ASIAN" in modo:
-        return f"🎯 Entrada: Asian {linea} córners {sufijo}"
+        accion = "1ª mitad" if periodo == "HT" else "partido"
+        return [f"🎯 Entrada sugerida: Asian {linea} córners {sufijo}"]
 
-    return None
+    return []
 
 
-# ══════════════════════════════════════════════════════════════════════
-# MENSAJE BASE — LIVE
-# ══════════════════════════════════════════════════════════════════════
+def _linea_entrada_gol(datos: dict) -> list[str]:
+    """
+    Devuelve 1-2 líneas de entrada para goles, al estilo:
+      🎯 Buscar 1 gol más en el partido
+      🎯 Entrada sugerida: over 2.5 goles FT
+    """
+    modo    = detectar_modo_por_codigo(datos) or ""
+    linea   = detectar_linea_por_codigo(datos) or ""
+    periodo = detectar_periodo_por_codigo(datos) or ""
+    sufijo  = "1ª mitad" if periodo == "HT" else "FT"
+
+    goles_raw = datos.get("goles") or ""
+    total_goles = None
+    if goles_raw:
+        partes = [p.strip() for p in goles_raw.replace("-", " ").split() if p.strip().isdigit()]
+        if len(partes) >= 2:
+            try:
+                total_goles = int(partes[0]) + int(partes[1])
+            except ValueError:
+                pass
+
+    # NEXTGOAL
+    if modo == "NEXTGOAL":
+        accion = "1ª mitad" if periodo == "HT" else "partido"
+        buscar = f"🎯 Buscar 1 gol más en el {accion}"
+        if total_goles is not None:
+            over_line = f"{total_goles + 0.5}" if total_goles == 0 else str(total_goles + 1)
+            entrada = f"🎯 Entrada sugerida: over {over_line} goles {sufijo}"
+        else:
+            entrada = f"🎯 Entrada sugerida: over 0.5 goles {sufijo}"
+        return [buscar, entrada]
+
+    # ASIAN +1
+    if "ASIAN" in modo and "+1" in linea:
+        accion = "1ª mitad" if periodo == "HT" else "partido"
+        buscar = f"🎯 Buscar 1 gol más en el {accion}"
+        if total_goles is not None:
+            over_line = f"{total_goles + 0.5}" if total_goles == 0 else str(total_goles + 1)
+            entrada = f"🎯 Entrada sugerida: Asian +1 {sufijo} (over {over_line} goles)"
+        else:
+            entrada = f"🎯 Entrada sugerida: Asian +1 goles {sufijo}"
+        return [buscar, entrada]
+
+    # ASIAN 0.5-1
+    if "ASIAN" in modo and "0.5" in linea and "1" in linea:
+        return [f"🎯 Entrada sugerida: Asian 0.5/1 goles {sufijo}"]
+
+    # OVER0.5, OVER1.5…
+    if modo.startswith("OVER"):
+        val    = modo.replace("OVER", "").strip()
+        accion = "1ª mitad" if periodo == "HT" else "partido"
+        buscar = f"🎯 Buscar over {val} goles en el {accion}"
+        return [buscar, f"🎯 Entrada sugerida: over {val} goles {sufijo}"]
+
+    return []
+
+
+def _construir_live_corner(datos: dict) -> str:
+    """Mensaje simplificado para picks de corner."""
+    titulo  = _titulo_visible(datos, "corner")
+    picks   = datos.get("picks")
+    liga    = datos.get("liga")
+    partido = datos.get("partido")
+    s_alerta = datos.get("strike_alerta")
+    s_liga   = datos.get("strike_liga")
+
+    lineas = []
+    lineas.append(f"<b>{titulo}</b>")
+
+    # Líneas de entrada justo debajo del título
+    for l in _linea_entrada_corner(datos):
+        lineas.append(l)
+
+    lineas.append("")
+
+    if picks:
+        lineas.append(f"📦 Historial: <b>{picks} picks</b>")
+    if liga:
+        lineas.append(f"🏆 Liga: <b>{liga}</b>")
+    if partido:
+        lineas.append(f"🚩 Partido: <b>{partido}</b>")
+
+    # Stats en vivo — sin tarjetas rojas ni cuotas
+    minuto  = datos.get("minuto")
+    estado  = datos.get("estado_partido")
+    goles   = datos.get("goles")
+    corners = datos.get("corners")
+    momentum = datos.get("momentum")
+
+    lineas.append("")
+    if minuto is not None:
+        lineas.append(f"⏱ Minuto: <b>{minuto}'</b>")
+    elif estado:
+        lineas.append(f"⏱ Estado: <b>{estado}</b>")
+    if goles:
+        lineas.append(f"🥅 Goles: <b>{goles}</b>")
+    if corners:
+        lineas.append(f"🚩 Córners: {corners}")
+    if momentum:
+        lineas.append(f"📈 Momentum: {momentum}")
+
+    lineas.append("")
+    if s_alerta:
+        lineas.append(f"📊 Acierto alerta: <b>{s_alerta}%</b>")
+    if s_liga:
+        s_liga_txt = s_liga if str(s_liga).upper() == "N/A" else f"{s_liga}%"
+        lineas.append(f"📈 Acierto liga: <b>{s_liga_txt}</b>")
+
+    # Salto de línea final para separar visualmente las alertas
+    lineas.append("")
+
+    return "\n".join(lineas)
 
 def _construir_live(datos: dict, tipo_pick: str, para_free: bool) -> str:
     subtitulo  = _subtitulo(datos, tipo_pick)
@@ -375,6 +480,15 @@ def _construir_live(datos: dict, tipo_pick: str, para_free: bool) -> str:
     lineas.append(f"<b>{titulo}</b>")
     lineas.append("──────────────")
     lineas.append(f"<b>{subtitulo}</b>")
+
+    # Líneas de entrada — justo después del subtítulo
+    if tipo_pick == "corner":
+        for l in _linea_entrada_corner(datos):
+            lineas.append(l)
+    elif tipo_pick == "gol":
+        for l in _linea_entrada_gol(datos):
+            lineas.append(l)
+
     lineas.append("")
 
     if picks:
@@ -390,18 +504,6 @@ def _construir_live(datos: dict, tipo_pick: str, para_free: bool) -> str:
     if stats:
         lineas.append("")
         lineas.extend(stats)
-
-    # Línea de entrada para corners
-    if tipo_pick == "corner":
-        entrada = _linea_entrada_corner(datos)
-        if entrada:
-            lineas.append(entrada)
-
-    # Línea de entrada para goles
-    if tipo_pick == "gol":
-        entrada = _linea_entrada_gol(datos)
-        if entrada:
-            lineas.append(entrada)
 
     # Cuota del siguiente gol (Over 0.5) para picks NEXTGOAL FT
     if modo == "NEXTGOAL" and tipo_pick == "gol":
@@ -516,6 +618,8 @@ def construir_mensaje_base(
 
     if fase == "PRE":
         msg = _construir_pre(datos, tipo_pick)
+    elif tipo_pick == "corner":
+        msg = _construir_live_corner(datos)
     else:
         msg = _construir_live(datos, tipo_pick, para_free)
 
