@@ -228,8 +228,16 @@ def _titulo_visible(datos: dict, tipo_pick: str) -> str:
 # BLOQUE DE ESTADÍSTICAS IN-PLAY
 # ══════════════════════════════════════════════════════════════════════
 
-def _bloque_stats_live(datos: dict) -> list[str]:
-    """Líneas con timer, goles, corners, momentum, rojas."""
+def _es_momentum_cero(momentum_raw: str) -> bool:
+    """Devuelve True si el momentum es 0-0 o equivalente."""
+    if not momentum_raw:
+        return True
+    partes = [p.strip() for p in momentum_raw.replace("-", " ").split() if p.strip().isdigit()]
+    return all(p == "0" for p in partes) if partes else True
+
+
+def _bloque_stats_live(datos: dict, con_corners: bool = True, con_rojas: bool = True) -> list[str]:
+    """Líneas con timer, goles, [corners], momentum, [rojas]."""
     lineas = []
 
     minuto  = datos.get("minuto")
@@ -241,12 +249,18 @@ def _bloque_stats_live(datos: dict) -> list[str]:
 
     if datos.get("goles"):
         lineas.append(f"🥅 Goles: <b>{datos['goles']}</b>")
-    if datos.get("corners"):
+    if con_corners and datos.get("corners"):
         lineas.append(f"🚩 Córners: {datos['corners']}")
-    if datos.get("momentum"):
-        lineas.append(f"📈 Momentum: {datos['momentum']}")
-    if datos.get("red_cards"):
-        lineas.append(f"🟥 Rojas: {datos['red_cards']}")
+
+    momentum = datos.get("momentum")
+    if momentum and not _es_momentum_cero(momentum):
+        lineas.append(f"📈 Momentum: {momentum}")
+
+    if con_rojas and datos.get("red_cards"):
+        rc = datos["red_cards"]
+        partes = [p.strip() for p in rc.replace("-", " ").split() if p.strip().isdigit()]
+        if not all(p == "0" for p in partes):
+            lineas.append(f"🟥 Rojas: {rc}")
 
     return lineas
 
@@ -450,7 +464,7 @@ def _construir_live_corner(datos: dict) -> str:
         lineas.append(f"🥅 Goles: <b>{goles}</b>")
     if corners:
         lineas.append(f"🚩 Córners: {corners}")
-    if momentum:
+    if momentum and not _es_momentum_cero(momentum):
         lineas.append(f"📈 Momentum: {momentum}")
 
     lineas.append("")
@@ -499,8 +513,8 @@ def _construir_live(datos: dict, tipo_pick: str, para_free: bool) -> str:
         emoji_partido = "⚽" if tipo_pick == "gol" else "🚩"
         lineas.append(f"{emoji_partido} Partido: <b>{partido}</b>")
 
-    # Stats en vivo
-    stats = _bloque_stats_live(datos)
+    # Stats en vivo — sin corners para goles
+    stats = _bloque_stats_live(datos, con_corners=False, con_rojas=True)
     if stats:
         lineas.append("")
         lineas.extend(stats)
