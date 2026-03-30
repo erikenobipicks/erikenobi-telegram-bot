@@ -25,6 +25,7 @@ from estadisticas import (
     enviar_resumenes_comando,
     enviar_resumen_anual_comando,
     enviar_resumen_liga_comando,
+    enviar_resumen_prepartido_comando,
     enviar_resumen_codigo_comando,
     publicar_resumen_diario_si_toca,
     publicar_resumen_semanal_si_toca,
@@ -295,6 +296,11 @@ async def cmd_resumen_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     codigo = context.args[0]
     await enviar_resumen_codigo_comando(update, codigo)
+
+
+async def cmd_resumen_pre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Resumen de estrategias prepartido con profit/ROI."""
+    await enviar_resumen_prepartido_comando(update)
 
 
 # ==============================
