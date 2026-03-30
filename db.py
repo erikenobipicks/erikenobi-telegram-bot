@@ -153,7 +153,7 @@ def db_picks_por_periodo(periodo: str) -> list[dict]:
                 if periodo == "dia":
                     cur.execute("""
                         SELECT * FROM picks
-                        WHERE fecha = CURRENT_DATE AT TIME ZONE 'Europe/Madrid'
+                        WHERE fecha = (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Madrid')::date
                         ORDER BY fecha_hora;
                     """)
 

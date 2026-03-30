@@ -22,6 +22,7 @@ from handlers import (
     cmd_resumen_mes,
     cmd_resumen_anual,
     cmd_resumen_liga,
+    cmd_resumen_pre,
     cmd_resumen_codigo,
     cmd_resultado,
     cmd_bankroll,
@@ -105,6 +106,7 @@ def main() -> None:
     # Nuevos resúmenes
     app.add_handler(CommandHandler("resumen_anual",  cmd_resumen_anual))
     app.add_handler(CommandHandler("resumen_liga",   cmd_resumen_liga))
+    app.add_handler(CommandHandler("resumen_pre",    cmd_resumen_pre))
     app.add_handler(CommandHandler("resumen_codigo", cmd_resumen_codigo))
 
     # Corrección manual de resultados (solo admins)

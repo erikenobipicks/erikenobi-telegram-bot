@@ -116,4 +116,5 @@ def registrar_envio_free(tipo_pick: str, datos: dict) -> None:
         fs["corners_enviados"] += 1
         fs["ultimo_score_corner"] = score
 
+    save_state()
     logger.info(f"Envío FREE registrado — tipo: {tipo_pick} | score: {score}")
