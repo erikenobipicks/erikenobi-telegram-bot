@@ -25,6 +25,7 @@ from handlers import (
     cmd_resumen_pre,
     cmd_resumen_codigo,
     cmd_resultado,
+    cmd_resultado_corner,
     cmd_bankroll,
     handler_excel_bankroll,
 )
@@ -32,6 +33,7 @@ from estadisticas import (
     publicar_resumen_diario_si_toca,
     publicar_resumen_semanal_si_toca,
     publicar_resumen_mensual_si_toca,
+    notificar_picks_pendientes_si_toca,
 )
 
 _TZ_MADRID = ZoneInfo("Europe/Madrid")
@@ -111,6 +113,7 @@ def main() -> None:
 
     # Corrección manual de resultados (solo admins)
     app.add_handler(CommandHandler("resultado",  cmd_resultado))
+    app.add_handler(CommandHandler("resultado_corner", cmd_resultado_corner))
 
     # Bankroll (solo admins)
     app.add_handler(CommandHandler("bankroll",   cmd_bankroll))
@@ -136,24 +139,32 @@ def main() -> None:
     async def job_resumen_mensual(ctx):
         await publicar_resumen_mensual_si_toca(ctx)
 
+    async def job_revision_pendientes(ctx):
+        await notificar_picks_pendientes_si_toca(ctx)
+
     # Diario y semanal: 22:05 todos los días
     # (_debe_publicar_ahora comprueba que sea domingo para el semanal)
     app.job_queue.run_daily(
         callback = job_resumen_diario,
-        time     = datetime.time(22, 5, tzinfo=_TZ_MADRID),
+        time     = datetime.time(0, 0, tzinfo=_TZ_MADRID),
         name     = "resumen_diario",
     )
     app.job_queue.run_daily(
         callback = job_resumen_semanal,
-        time     = datetime.time(22, 5, tzinfo=_TZ_MADRID),
+        time     = datetime.time(0, 0, tzinfo=_TZ_MADRID),
         name     = "resumen_semanal",
     )
     # Mensual: 10:05 todos los días
     # (_debe_publicar_ahora comprueba que sea día 1)
     app.job_queue.run_daily(
         callback = job_resumen_mensual,
-        time     = datetime.time(10, 5, tzinfo=_TZ_MADRID),
+        time     = datetime.time(0, 0, tzinfo=_TZ_MADRID),
         name     = "resumen_mensual",
+    )
+    app.job_queue.run_daily(
+        callback = job_revision_pendientes,
+        time     = datetime.time(8, 0, tzinfo=_TZ_MADRID),
+        name     = "revision_pendientes",
     )
 
     logger.info("Bot iniciado — escuchando mensajes nuevos y editados.")

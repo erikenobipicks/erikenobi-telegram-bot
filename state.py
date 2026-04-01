@@ -40,6 +40,7 @@ def load_state() -> None:
         STATE = copy.deepcopy(DEFAULT_STATE)
         STATE["mensajes_publicados"] = loaded.get("mensajes_publicados", {})
         STATE["free_state"]          = loaded.get("free_state", DEFAULT_STATE["free_state"])
+        STATE["estadisticas"]        = loaded.get("estadisticas", DEFAULT_STATE["estadisticas"])
 
         logger.info("Estado volátil cargado desde disco.")
     except FileNotFoundError:

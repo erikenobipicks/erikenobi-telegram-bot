@@ -11,8 +11,10 @@ Dos funciones públicas:
       → mensaje con resultado añadido/actualizado
 """
 
-import re
 import logging
+import math
+import re
+from html import escape
 
 from bankroll import construir_linea_stake_pre
 from extractor import (
@@ -23,6 +25,17 @@ from extractor import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _esc(valor) -> str:
+    """Escapa texto dinÃ¡mico antes de insertarlo en mensajes HTML."""
+    return escape(str(valor), quote=False)
+
+
+def _limpiar_prefijo_visual(texto: str | None) -> str | None:
+    if not texto:
+        return texto
+    return re.sub(r"^[^\w\d]+\s*", "", texto).strip()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -153,6 +166,70 @@ def _sumar_marcador(raw: str | None) -> int | None:
     return None
 
 
+def _formatear_linea_real(valor: float | int) -> str:
+    if isinstance(valor, float) and valor.is_integer():
+        return str(int(valor))
+    if isinstance(valor, int):
+        return str(valor)
+    return str(valor).replace(".0", "")
+
+
+def _extra_objetivo_desde_linea(valor: str | None) -> int | None:
+    if not valor:
+        return None
+
+    numeros = re.findall(r"\d+(?:[.,]\d+)?", valor)
+    if not numeros:
+        return None
+
+    try:
+        maximo = max(float(num.replace(",", ".")) for num in numeros)
+    except ValueError:
+        return None
+
+    return max(1, math.ceil(maximo))
+
+
+def _linea_real_gol(datos: dict) -> str | None:
+    modo = (detectar_modo_por_codigo(datos) or "").upper()
+    linea = (detectar_linea_por_codigo(datos) or "").upper()
+    total_goles = _sumar_marcador(datos.get("goles"))
+
+    if total_goles is None:
+        return None
+
+    if modo == "NEXTGOAL":
+        return _formatear_linea_real(total_goles + 1)
+
+    if modo == "+1":
+        return _formatear_linea_real(total_goles + 1)
+
+    if "ASIAN" in modo:
+        extra = 1 if "+1" in linea else _extra_objetivo_desde_linea(linea)
+        if extra is not None:
+            return _formatear_linea_real(total_goles + extra)
+
+    if "SINGLE" in modo:
+        if "+1" in linea:
+            return _formatear_linea_real(total_goles + 1)
+        if "OVER" in linea:
+            extra = _extra_objetivo_desde_linea(linea.replace("OVER", "", 1))
+            if extra is not None:
+                return _formatear_linea_real(total_goles + extra)
+
+    if modo.startswith("OVER"):
+        extra = _extra_objetivo_desde_linea(modo.replace("OVER", "", 1))
+        if extra is not None:
+            return _formatear_linea_real(total_goles + extra)
+
+    if "OVER" in modo:
+        extra = _extra_objetivo_desde_linea(linea)
+        if extra is not None:
+            return _formatear_linea_real(total_goles + extra)
+
+    return None
+
+
 def _entrada_titulo(datos: dict, tipo_pick: str) -> str | None:
     """Texto corto de entrada para mostrar junto al título."""
     fase    = detectar_fase_por_codigo(datos) or ""
@@ -165,12 +242,9 @@ def _entrada_titulo(datos: dict, tipo_pick: str) -> str | None:
         return None
 
     if tipo_pick == "gol":
-        total_goles = _sumar_marcador(datos.get("goles"))
-        if modo == "NEXTGOAL" or ("ASIAN" in modo and "+1" in linea):
-            if total_goles is not None:
-                over_line = f"{total_goles + 0.5}" if total_goles == 0 else str(total_goles + 1)
-                return f"🎯 Over {over_line} {sufijo}"
-            return f"🎯 Over +1 gol {sufijo}"
+        linea_real = _linea_real_gol(datos)
+        if linea_real is not None:
+            return f"🎯 Línea {linea_real} {sufijo}"
         if modo.startswith("OVER"):
             val = modo.replace("OVER", "").strip()
             if val:
@@ -198,7 +272,7 @@ def _titulo_visible(datos: dict, tipo_pick: str) -> str:
     Construye la primera línea del mensaje: emoji + mercado + partido.
     """
     emoji   = "⚽" if tipo_pick == "gol" else "🚩"
-    partido = datos.get("partido") or ""
+    partido = _esc(datos.get("partido") or "")
     periodo = detectar_periodo_por_codigo(datos) or ""
     modo    = detectar_modo_por_codigo(datos) or ""
     linea   = detectar_linea_por_codigo(datos) or ""
@@ -270,7 +344,7 @@ def _titulo_visible(datos: dict, tipo_pick: str) -> str:
     entrada = _entrada_titulo(datos, tipo_pick)
     if entrada:
         # Si tenemos línea de entrada calculada, la priorizamos en la 1ª línea.
-        base = f"{emoji} {entrada}"
+        base = f"{emoji} {_limpiar_prefijo_visual(entrada)}"
         if partido:
             base = f"{base} | {partido}"
         return base
@@ -306,10 +380,10 @@ def _formatear_momentum(momentum_raw: str) -> str:
     if len(partes) >= 2:
         try:
             if max(int(partes[0]), int(partes[1])) >= 60:
-                return f"<b>{momentum_raw}</b>"
+                return f"<b>{_esc(momentum_raw)}</b>"
         except ValueError:
             pass
-    return momentum_raw
+    return _esc(momentum_raw)
 
 
 def _bloque_stats_live(datos: dict, con_corners: bool = True, con_rojas: bool = True) -> list[str]:
@@ -321,12 +395,12 @@ def _bloque_stats_live(datos: dict, con_corners: bool = True, con_rojas: bool = 
     if minuto is not None:
         lineas.append(f"⏱ Minuto: <b>{minuto}'</b>")
     elif estado:
-        lineas.append(f"⏱ Estado: <b>{estado}</b>")
+        lineas.append(f"⏱ Estado: <b>{_esc(estado)}</b>")
 
     if datos.get("goles"):
-        lineas.append(f"🥅 Goles: <b>{datos['goles']}</b>")
+        lineas.append(f"🥅 Goles: <b>{_esc(datos['goles'])}</b>")
     if con_corners and datos.get("corners"):
-        lineas.append(f"🚩 Córners: {datos['corners']}")
+        lineas.append(f"🚩 Córners: {_esc(datos['corners'])}")
 
     momentum = datos.get("momentum")
     if momentum and not _es_momentum_cero(momentum):
@@ -336,7 +410,7 @@ def _bloque_stats_live(datos: dict, con_corners: bool = True, con_rojas: bool = 
         rc = datos["red_cards"]
         partes = [p.strip() for p in rc.replace("-", " ").split() if p.strip().isdigit()]
         if not all(p == "0" for p in partes):
-            lineas.append(f"🟥 Rojas: {rc}")
+            lineas.append(f"🟥 Rojas: {_esc(rc)}")
 
     return lineas
 
@@ -440,41 +514,12 @@ def _linea_entrada_gol(datos: dict) -> list[str]:
     Devuelve una línea corta de entrada para goles.
     """
     modo    = detectar_modo_por_codigo(datos) or ""
-    linea   = detectar_linea_por_codigo(datos) or ""
     periodo = detectar_periodo_por_codigo(datos) or ""
     sufijo  = "1ª mitad" if periodo == "HT" else "FT"
 
-    goles_raw = datos.get("goles") or ""
-    total_goles = None
-    if goles_raw:
-        partes = [p.strip() for p in goles_raw.replace("-", " ").split() if p.strip().isdigit()]
-        if len(partes) >= 2:
-            try:
-                total_goles = int(partes[0]) + int(partes[1])
-            except ValueError:
-                pass
-
-    # NEXTGOAL
-    if modo == "NEXTGOAL":
-        if total_goles is not None:
-            over_line = f"{total_goles + 0.5}" if total_goles == 0 else str(total_goles + 1)
-            entrada = f"🎯 Entrada: over {over_line} goles {sufijo}"
-        else:
-            entrada = f"🎯 Entrada: over 0.5 goles {sufijo}"
-        return [entrada]
-
-    # ASIAN +1
-    if "ASIAN" in modo and "+1" in linea:
-        if total_goles is not None:
-            over_line = f"{total_goles + 0.5}" if total_goles == 0 else str(total_goles + 1)
-            entrada = f"🎯 Entrada: Asian +1 {sufijo} (over {over_line} goles)"
-        else:
-            entrada = f"🎯 Entrada: Asian +1 goles {sufijo}"
-        return [entrada]
-
-    # ASIAN 0.5-1
-    if "ASIAN" in modo and "0.5" in linea and "1" in linea:
-        return [f"🎯 Entrada: Asian 0.5/1 goles {sufijo}"]
+    linea_real = _linea_real_gol(datos)
+    if linea_real is not None:
+        return [f"🎯 Entrada: línea {linea_real} goles {sufijo}"]
 
     # OVER0.5, OVER1.5…
     if modo.startswith("OVER"):
@@ -488,7 +533,7 @@ def _construir_live_corner(datos: dict) -> str:
     """Mensaje simplificado para picks de corner."""
     titulo  = _titulo_visible(datos, "corner")
     picks   = datos.get("picks")
-    liga    = datos.get("liga")
+    liga    = _esc(datos.get("liga") or "")
     s_alerta = datos.get("strike_alerta")
     s_liga   = datos.get("strike_liga")
 
@@ -517,11 +562,11 @@ def _construir_live_corner(datos: dict) -> str:
     if minuto is not None:
         lineas.append(f"⏱ Minuto: <b>{minuto}'</b>")
     elif estado:
-        lineas.append(f"⏱ Estado: <b>{estado}</b>")
+        lineas.append(f"⏱ Estado: <b>{_esc(estado)}</b>")
     if goles:
-        lineas.append(f"🥅 Goles: <b>{goles}</b>")
+        lineas.append(f"🥅 Goles: <b>{_esc(goles)}</b>")
     if corners:
-        lineas.append(f"🚩 Córners: {corners}")
+        lineas.append(f"🚩 Córners: {_esc(corners)}")
     if momentum and not _es_momentum_cero(momentum):
         lineas.append(f"📈 Momentum: {_formatear_momentum(momentum)}")
 
@@ -541,7 +586,7 @@ def _construir_live(datos: dict, tipo_pick: str, para_free: bool) -> str:
     subtitulo  = _subtitulo(datos, tipo_pick)
     titulo     = _titulo_visible(datos, tipo_pick)
     picks      = datos.get("picks")
-    liga       = datos.get("liga")
+    liga       = _esc(datos.get("liga") or "")
     odds       = _formatear_odds(datos.get("odds_1x2"))
     s_alerta   = datos.get("strike_alerta")
     s_liga     = datos.get("strike_liga")
@@ -603,8 +648,8 @@ def _construir_pre(datos: dict, tipo_pick: str) -> str:
     subtitulo = _subtitulo(datos, tipo_pick)
     titulo    = _titulo_visible(datos, tipo_pick)
     picks     = datos.get("picks")
-    liga      = datos.get("liga")
-    kickoff   = datos.get("kickoff")
+    liga      = _esc(datos.get("liga") or "")
+    kickoff   = _esc(datos.get("kickoff") or "")
     odds_raw  = datos.get("odds_1x2")
     odds      = _formatear_odds(odds_raw)
     s_alerta  = datos.get("strike_alerta")
@@ -723,9 +768,9 @@ def construir_mensaje_editado(
     bloque_resultado = f"\n\n{emoji_res} <b>{texto_res}</b>"
 
     if marcador_final:
-        bloque_resultado += f"\n📌 Marcador final: <b>{marcador_final}</b>"
+        bloque_resultado += f"\n📌 Marcador final: <b>{_esc(marcador_final)}</b>"
     elif marcador_desc:
-        bloque_resultado += f"\n📌 Marcador descanso: <b>{marcador_desc}</b>"
+        bloque_resultado += f"\n📌 Marcador descanso: <b>{_esc(marcador_desc)}</b>"
 
     # Si ya existe un bloque de resultado, lo reemplazamos
     base_limpio = re.sub(

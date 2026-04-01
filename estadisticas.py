@@ -1,10 +1,17 @@
 import logging
 from datetime import timedelta
 
-from utils import hoy_str, ahora_str, semana_str, ahora_madrid
+from extractor import (
+    detectar_linea_por_codigo,
+    detectar_modo_por_codigo,
+    detectar_periodo_por_codigo,
+)
+from espn import resolver_corner_pick_espn
+from utils import hoy_str, ahora_str, semana_str, ahora_madrid, parse_marcador_total
 from db import (
     db_registrar_pick,
-    db_actualizar_resultado,
+    db_actualizar_resultado_confirmado,
+    db_pick_por_message_id,
     db_picks_por_periodo,
     db_picks_filtrados,
     db_calcular_racha_actual,
@@ -13,7 +20,7 @@ from db import (
     db_stats_prepartido_por_mes,
     db_stats_prepartido_global,
 )
-from config import RESUMENES_CONFIG, RACHA_MINIMA, CANAL_RACHA_ID
+from config import RESUMENES_CONFIG, RACHA_MINIMA, CANAL_RACHA_ID, ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +40,11 @@ def registrar_pick_estadistica(
     # PRE_O25FT → primera cuota de Over/Under 2.50 (cuota over 2.5)
     odds = None
     codigo = datos.get("codigo") or ""
+    periodo_codigo = detectar_periodo_por_codigo(datos)
+    modo_codigo = detectar_modo_por_codigo(datos)
+    linea_codigo = detectar_linea_por_codigo(datos)
+    corners_entrada_total = None
+
     if codigo.upper().startswith("PRE_"):
         if "O25" in codigo.upper() or "OVER2.5" in codigo.upper():
             odds_raw = datos.get("odds_over_2_5") or ""
@@ -45,23 +57,117 @@ def registrar_pick_estadistica(
             except ValueError:
                 pass
 
+    if tipo_pick == "corner":
+        corners_entrada_total = parse_marcador_total(datos.get("corners"))
+
     db_registrar_pick(
         message_id_origen = str(message_id_origen),
         codigo            = datos.get("codigo"),
         tipo_pick         = tipo_pick,
+        periodo_codigo    = periodo_codigo,
+        modo_codigo       = modo_codigo,
+        linea_codigo      = linea_codigo,
         liga              = datos.get("liga"),
         partido           = datos.get("partido"),
         strike_alerta     = datos.get("strike_alerta"),
         strike_liga       = datos.get("strike_liga"),
         enviado_a_free    = enviado_a_free,
+        corners_entrada_total = corners_entrada_total,
         fecha             = hoy_str(),
         fecha_hora        = ahora_str(),
         odds              = odds,
     )
 
 
-def actualizar_resultado_estadistica(message_id_origen, resultado: str) -> None:
-    db_actualizar_resultado(str(message_id_origen), resultado)
+def actualizar_resultado_estadistica(message_id_origen, resultado: str) -> bool:
+    return db_actualizar_resultado_confirmado(str(message_id_origen), resultado)
+
+
+def es_pick_corner_mas_uno(pick: dict | None) -> bool:
+    if not pick or pick.get("tipo_pick") != "corner":
+        return False
+
+    modo = (pick.get("modo_codigo") or "").upper()
+    linea = (pick.get("linea_codigo") or "").upper()
+    return (
+        ("ASIAN" in modo and "+1" in linea)
+        or modo == "+1"
+        or ("SINGLE" in modo and "+1" in linea)
+    )
+
+
+def calcular_resultado_corner_mas_uno(
+    corners_entrada_total: int,
+    corners_final_total: int,
+) -> str:
+    delta = corners_final_total - corners_entrada_total
+    if delta <= 0:
+        return "MISS"
+    if delta == 1:
+        return "VOID"
+    return "HIT"
+
+
+def resolver_resultado_corner_mas_uno(
+    message_id_origen: str,
+    corners_final_total: int,
+) -> tuple[bool, str]:
+    pick = db_pick_por_message_id(str(message_id_origen))
+    if not pick:
+        return False, "No encontré ese pick en la base de datos."
+
+    if not es_pick_corner_mas_uno(pick):
+        return False, "Ese pick no es un córner +1 compatible con este comando."
+
+    corners_entrada_total = pick.get("corners_entrada_total")
+    if corners_entrada_total is None:
+        return False, "Ese pick no tiene guardado el total de córners de entrada."
+
+    if corners_final_total < corners_entrada_total:
+        return (
+            False,
+            f"El total final ({corners_final_total}) no puede ser menor que el de entrada ({corners_entrada_total}).",
+        )
+
+    resultado = calcular_resultado_corner_mas_uno(
+        corners_entrada_total=corners_entrada_total,
+        corners_final_total=corners_final_total,
+    )
+    actualizado = actualizar_resultado_estadistica(message_id_origen, resultado)
+    if not actualizado:
+        return False, "No pude actualizar el resultado en la base de datos."
+
+    periodo = (pick.get("periodo_codigo") or "FT").upper()
+    extras = corners_final_total - corners_entrada_total
+    return (
+        True,
+        f"Pick {message_id_origen} actualizado a {resultado}. "
+        f"Entrada: {corners_entrada_total} córners | Final {periodo}: {corners_final_total} | "
+        f"Córners tras la entrada: {extras}.",
+    )
+
+async def auto_resolver_pick_corner_mas_uno(pick: dict) -> tuple[bool, str]:
+    if not es_pick_corner_mas_uno(pick):
+        return False, "No es un pick de corners +1 compatible."
+
+    if pick.get("corners_entrada_total") is None:
+        return False, "No tiene guardado el total de corners de entrada."
+
+    datos_espn = await resolver_corner_pick_espn(pick)
+    if not datos_espn:
+        return False, "No se pudo localizar el partido con suficiente confianza en ESPN."
+
+    ok, mensaje = resolver_resultado_corner_mas_uno(
+        str(pick.get("message_id_origen")),
+        int(datos_espn["corners_final_total"]),
+    )
+    if not ok:
+        return False, mensaje
+
+    return (
+        True,
+        f"{mensaje} Fuente: ESPN ({datos_espn['partido_espn']}, event {datos_espn['event_id']}).",
+    )
 
 
 # ==============================
@@ -171,9 +277,11 @@ def _construir_resumen_anual(lista: list) -> str:
 def _clave_periodo(periodo: str) -> str:
     ahora = ahora_madrid()
     if periodo == "dia":
-        return hoy_str()
+        return (ahora - timedelta(days=1)).strftime("%Y-%m-%d")
     if periodo == "semana":
-        return semana_str()
+        ref = ahora - timedelta(days=1)
+        year, week, _ = ref.isocalendar()
+        return f"{year}-W{week}"
     if periodo == "mes":
         primer_dia = ahora.replace(day=1)
         mes_anterior = primer_dia - timedelta(days=1)
@@ -184,11 +292,11 @@ def _clave_periodo(periodo: str) -> str:
 def _debe_publicar_ahora(periodo: str) -> bool:
     ahora = ahora_madrid()
     if periodo == "dia":
-        return ahora.hour >= 22
+        return True
     if periodo == "semana":
-        return ahora.weekday() == 6 and ahora.hour >= 22
+        return ahora.weekday() == 0
     if periodo == "mes":
-        return ahora.day == 1 and ahora.hour >= 10
+        return ahora.day == 1
     return False
 
 
@@ -214,6 +322,13 @@ _PERIODO_DB = {
     "anio":   "anio",
 }
 
+_PERIODO_DB_AUTO = {
+    "dia":    "ayer",
+    "semana": "semana_anterior",
+    "mes":    "mes_anterior",
+    "anio":   "anio",
+}
+
 
 def _titulo_resumen(periodo: str, tipo_pick, label: str) -> str:
     return _TITULOS.get((periodo, tipo_pick), f"RESUMEN — {label}")
@@ -228,7 +343,7 @@ async def publicar_resumenes_si_toca(context, periodo: str) -> None:
         return
 
     clave_valor = _clave_periodo(periodo)
-    periodo_db  = _PERIODO_DB.get(periodo, periodo)
+    periodo_db  = _PERIODO_DB_AUTO.get(periodo, periodo)
     lista_base  = db_picks_por_periodo(periodo_db)
 
     for cfg in RESUMENES_CONFIG:
@@ -269,6 +384,111 @@ async def publicar_resumen_semanal_si_toca(context) -> None:
 
 async def publicar_resumen_mensual_si_toca(context) -> None:
     await publicar_resumenes_si_toca(context, "mes")
+
+
+def _debe_notificar_pendientes_ahora() -> bool:
+    ahora = ahora_madrid()
+    return (ahora.hour, ahora.minute) >= (8, 0)
+
+
+def _partir_mensajes(texto_base: str, lineas: list[str], max_len: int = 3900) -> list[str]:
+    mensajes = []
+    actual = texto_base
+
+    for linea in lineas:
+        candidata = f"{actual}\n{linea}" if actual else linea
+        if len(candidata) > max_len and actual:
+            mensajes.append(actual)
+            actual = f"{texto_base}\n{linea}"
+        else:
+            actual = candidata
+
+    if actual:
+        mensajes.append(actual)
+
+    return mensajes
+
+
+async def notificar_picks_pendientes_si_toca(context) -> None:
+    if not _debe_notificar_pendientes_ahora():
+        return
+
+    clave_valor = _clave_periodo("dia")
+    clave_control = "revision_pendientes_dia"
+
+    if db_ya_publicado(clave_control, clave_valor):
+        return
+
+    pendientes = [
+        pick for pick in db_picks_por_periodo("ayer")
+        if not pick.get("resultado")
+    ]
+
+    auto_resueltos: list[str] = []
+    pendientes_finales: list[dict] = []
+
+    for pick in pendientes:
+        if es_pick_corner_mas_uno(pick):
+            ok, mensaje = await auto_resolver_pick_corner_mas_uno(pick)
+            if ok:
+                auto_resueltos.append(mensaje)
+                continue
+        pendientes_finales.append(pick)
+
+    pendientes = pendientes_finales
+
+    if not pendientes and not auto_resueltos:
+        db_marcar_publicado(clave_control, clave_valor)
+        logger.info("Revision de pendientes: no hay picks sin resultado del dia anterior.")
+        return
+
+    mensajes: list[str] = []
+
+    if auto_resueltos:
+        encabezado_auto = (
+            f"Revision automatica corners +1 - {clave_valor}\n\n"
+            f"Se han resuelto automaticamente {len(auto_resueltos)} pick(s) usando ESPN:\n"
+        )
+        mensajes.extend(_partir_mensajes(encabezado_auto, [f"- {linea}" for linea in auto_resueltos]))
+
+    encabezado = (
+        f"Revision manual pendiente - {clave_valor}\n\n"
+        f"Hay {len(pendientes)} pick(s) de ayer sin resultado final en la base de datos.\n"
+        "Verificalos manualmente con /resultado <message_id> HIT|MISS|VOID.\n"
+        "Para corners +1 puedes usar /resultado_corner <message_id> <corners_finales_del_periodo>.\n"
+    )
+
+    lineas = []
+    for pick in pendientes:
+        tipo = (pick.get("tipo_pick") or "?").upper()
+        codigo = pick.get("codigo") or "-"
+        liga = pick.get("liga") or "-"
+        partido = pick.get("partido") or "-"
+        msg_id = pick.get("message_id_origen") or "-"
+        if es_pick_corner_mas_uno(pick) and pick.get("corners_entrada_total") is not None:
+            periodo = (pick.get("periodo_codigo") or "FT").upper()
+            entrada = pick.get("corners_entrada_total")
+            lineas.append(
+                f"- {msg_id} | {tipo} | {codigo} | {liga} | {partido} | entrada={entrada} | "
+                f"usa: /resultado_corner {msg_id} <corners_finales_{periodo}>"
+            )
+        else:
+            lineas.append(f"- {msg_id} | {tipo} | {codigo} | {liga} | {partido}")
+
+    if pendientes:
+        mensajes.extend(_partir_mensajes(encabezado, lineas))
+
+    enviado_ok = False
+    for admin_id in ADMIN_IDS:
+        try:
+            for mensaje in mensajes:
+                await context.bot.send_message(chat_id=admin_id, text=mensaje)
+            enviado_ok = True
+        except Exception as e:
+            logger.error(f"Error enviando revision de pendientes al admin {admin_id}: {e}")
+
+    if enviado_ok:
+        db_marcar_publicado(clave_control, clave_valor)
 
 
 # ==============================

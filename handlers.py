@@ -1,4 +1,6 @@
 import logging
+import os
+import tempfile
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -22,6 +24,7 @@ from free import debe_enviar_a_free, registrar_envio_free
 from estadisticas import (
     registrar_pick_estadistica,
     actualizar_resultado_estadistica,
+    resolver_resultado_corner_mas_uno,
     enviar_resumenes_comando,
     enviar_resumen_anual_comando,
     enviar_resumen_liga_comando,
@@ -30,6 +33,7 @@ from estadisticas import (
     publicar_resumen_diario_si_toca,
     publicar_resumen_semanal_si_toca,
     publicar_resumen_mensual_si_toca,
+    notificar_picks_pendientes_si_toca,
     verificar_racha_y_notificar,
 )
 
@@ -173,6 +177,7 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
     await publicar_resumen_diario_si_toca(context)
     await publicar_resumen_semanal_si_toca(context)
     await publicar_resumen_mensual_si_toca(context)
+    await notificar_picks_pendientes_si_toca(context)
 
 
 # ==============================
@@ -223,7 +228,9 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
             f"Sin referencia en STATE — solo se actualiza la DB."
         )
 
-    actualizar_resultado_estadistica(msg_id, datos.get("resultado"))
+    actualizado = actualizar_resultado_estadistica(msg_id, datos.get("resultado"))
+    if not actualizado:
+        logger.warning(f"No se pudo actualizar el resultado en DB para msg_id {msg_id}")
     save_state()
 
     # Comprobar racha solo cuando el resultado es HIT
@@ -233,6 +240,7 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
     await publicar_resumen_diario_si_toca(context)
     await publicar_resumen_semanal_si_toca(context)
     await publicar_resumen_mensual_si_toca(context)
+    await notificar_picks_pendientes_si_toca(context)
 
 
 # ==============================
@@ -339,7 +347,12 @@ async def cmd_resultado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    actualizar_resultado_estadistica(msg_id_str, resultado)
+    actualizado = actualizar_resultado_estadistica(msg_id_str, resultado)
+    if not actualizado:
+        await update.message.reply_text(
+            f"No se encontrÃ³ ningÃºn pick con el message_id {msg_id_str} en la DB."
+        )
+        return
 
     logger.info(
         f"Resultado actualizado manualmente por admin {user.id}: "
@@ -355,6 +368,48 @@ async def cmd_resultado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # ==============================
 # BANKROLL — CONSULTA Y ACTUALIZACIÓN
 # ==============================
+
+async def cmd_resultado_corner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Calcula el resultado de un pick de corners +1 usando el total final del periodo.
+    Solo accesible para admins.
+
+    Uso: /resultado_corner <message_id_origen> <corners_finales_del_periodo>
+    Ejemplo: /resultado_corner 12345 8
+    """
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("No tienes permisos para usar este comando.")
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "Uso: /resultado_corner <message_id_origen> <corners_finales_del_periodo>\n"
+            "Ejemplo: /resultado_corner 12345 8"
+        )
+        return
+
+    msg_id_str = context.args[0]
+
+    try:
+        corners_finales = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text(
+            "El total final de corners debe ser un numero entero."
+        )
+        return
+
+    ok, mensaje = resolver_resultado_corner_mas_uno(msg_id_str, corners_finales)
+    if not ok:
+        await update.message.reply_text(mensaje)
+        return
+
+    logger.info(
+        f"Resultado de corners +1 actualizado manualmente por admin {user.id}: "
+        f"msg {msg_id_str} | corners_finales={corners_finales}"
+    )
+    await update.message.reply_text(mensaje)
+
 
 async def cmd_bankroll(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -423,7 +478,7 @@ async def handler_excel_bankroll(update: Update, context: ContextTypes.DEFAULT_T
 
     try:
         archivo = await context.bot.get_file(message.document.file_id)
-        ruta    = f"/tmp/bankroll_{user.id}.xlsx"
+        ruta    = os.path.join(tempfile.gettempdir(), f"bankroll_{user.id}.xlsx")
         await archivo.download_to_drive(ruta)
     except Exception as e:
         logger.error(f"Error descargando Excel de bankroll: {e}")
