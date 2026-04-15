@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "routes": [
+    {
+      "src": "^/$",
+      "dest": "/landing-instagram/index.html"
+    },
+    {
+      "src": "^/index\\.html$",
+      "dest": "/landing-instagram/index.html"
+    },
+    {
+      "src": "^/(styles\\.css|script\\.js|social-preview\\.svg)$",
+      "dest": "/landing-instagram/$1"
+    },
+    {
+      "src": "^/(.*)$",
+      "dest": "/landing-instagram/index.html"
+    }
+  ]
+}

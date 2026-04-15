@@ -1,0 +1,23 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="630" fill="#07101D"/>
+  <circle cx="166" cy="93" r="220" fill="#6CF9D4" fill-opacity="0.12"/>
+  <circle cx="1020" cy="80" r="180" fill="#FFC94B" fill-opacity="0.12"/>
+  <circle cx="1023" cy="524" r="220" fill="#B7FF3C" fill-opacity="0.08"/>
+  <rect x="56" y="54" width="1088" height="522" rx="32" fill="#0D1C31" stroke="#223957"/>
+  <rect x="88" y="88" width="102" height="102" rx="24" fill="url(#paint0_linear_1_2)"/>
+  <path d="M125.664 152V125.16H135.776V135.832L145.496 125.16H157.336L146.048 137L158.048 152H146.336L139.312 142.76L135.776 146.424V152H125.664Z" fill="#071219"/>
+  <text fill="#F4F7FB" xml:space="preserve" style="white-space: pre" font-family="Arial" font-size="56" font-weight="700" letter-spacing="0em"><tspan x="220" y="128.852">Erikenobi Picks Premium</tspan></text>
+  <text fill="#B7FF3C" xml:space="preserve" style="white-space: pre" font-family="Arial" font-size="20" font-weight="700" letter-spacing="0.22em"><tspan x="91" y="257.82">ALERTAS DE FUTBOL POR TELEGRAM</tspan></text>
+  <text fill="#F4F7FB" xml:space="preserve" style="white-space: pre" font-family="Arial" font-size="66" font-weight="700" letter-spacing="-0.04em"><tspan x="88" y="335.352">Goles, corners y combo</tspan><tspan x="88" y="411.352">con canal free y acceso premium</tspan></text>
+  <text fill="#9FB0C9" xml:space="preserve" style="white-space: pre" font-family="Arial" font-size="28" font-weight="400" letter-spacing="0em"><tspan x="91" y="495.578">Planes claros, pagos flexibles y una entrada pensada para convertir</tspan></text>
+  <rect x="90" y="521" width="202" height="48" rx="24" fill="#B7FF3C"/>
+  <text fill="#071219" xml:space="preserve" style="white-space: pre" font-family="Arial" font-size="22" font-weight="700" letter-spacing="0em"><tspan x="124" y="551.883">Ver planes</tspan></text>
+  <rect x="308" y="521" width="233" height="48" rx="24" fill="#15263F" stroke="#2A4568"/>
+  <text fill="#F4F7FB" xml:space="preserve" style="white-space: pre" font-family="Arial" font-size="22" font-weight="700" letter-spacing="0em"><tspan x="353" y="551.883">Canal FREE</tspan></text>
+  <defs>
+    <linearGradient id="paint0_linear_1_2" x1="88" y1="88" x2="190" y2="190" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B7FF3C"/>
+      <stop offset="1" stop-color="#6CF9D4"/>
+    </linearGradient>
+  </defs>
+</svg>

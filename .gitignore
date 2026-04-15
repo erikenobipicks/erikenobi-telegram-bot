@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+bot_state.json
+bankroll.json
+bot.log
+premium_bot.log
+.env
