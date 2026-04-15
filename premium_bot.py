@@ -57,10 +57,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # DB de solo lectura del bot de picks (para estadísticas reales)
 PICKS_DATABASE_URL = os.getenv("PICKS_DATABASE_URL")
 
-ADMIN_IDS = [9330181]
-
-CANAL_CORNERS_ID = -1003895151594
-CANAL_GOLES_ID   = -1003818905455
+from config import ADMIN_IDS, CANAL_CORNERS_ID, CANAL_GOLES_ID
 
 LINK_FREE = "https://t.me/+WhIkP2PstS1kMDVk"
 CONTACTO_TELEGRAM = "https://t.me/erikenobi"

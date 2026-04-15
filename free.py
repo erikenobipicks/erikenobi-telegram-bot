@@ -4,7 +4,7 @@ from config import (
     FREE_HORA_INICIO, FREE_HORA_FIN, FREE_TIMEZONE,
     MAX_FREE_GOLES, MAX_FREE_CORNERS, MAX_FREE_TOTAL,
 )
-from utils import ahora_madrid, hoy_str, clave_hora_actual_free, parse_percent
+from utils import ahora_madrid, hoy_str, clave_hora_actual_free
 from db import db_leer_free_state, db_guardar_free_state
 
 logger = logging.getLogger(__name__)
@@ -49,20 +49,6 @@ def reset_free_state_si_toca(fs: dict) -> dict:
 
 def total_free_enviados(fs: dict) -> int:
     return fs.get("goles_enviados", 0) + fs.get("corners_enviados", 0)
-
-
-def score_para_free(datos: dict) -> int:
-    """Calcula un score de prioridad para seleccionar el mejor pick FREE del día."""
-    strike_alerta = parse_percent(datos.get("strike_alerta"))
-    strike_liga   = parse_percent(datos.get("strike_liga"))
-
-    if strike_alerta is None and strike_liga is None:
-        return -1
-    if strike_alerta is not None and strike_liga is not None:
-        return strike_alerta * 1000 + strike_liga
-    if strike_alerta is not None:
-        return strike_alerta * 1000
-    return strike_liga if strike_liga is not None else -1
 
 
 # ==============================

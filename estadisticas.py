@@ -365,14 +365,6 @@ def _clave_periodo(periodo: str) -> str:
     return ""
 
 
-def _debe_publicar_ahora(periodo: str) -> bool:
-    """
-    Los jobs en main.py ya se disparan en el día y hora correctos,
-    así que aquí solo evitamos publicar si ya está marcado en resumen_control.
-    Esta función siempre devuelve True — el control real lo hace db_ya_publicado.
-    """
-    return True
-
 
 _TITULOS = {
     ("dia",    "gol"):    "RESUMEN DEL DÍA — GOLES",
@@ -413,9 +405,6 @@ def _titulo_resumen(periodo: str, tipo_pick, label: str) -> str:
 # ==============================
 
 async def publicar_resumenes_si_toca(context, periodo: str) -> None:
-    if not _debe_publicar_ahora(periodo):
-        return
-
     clave_valor = _clave_periodo(periodo)
     periodo_db  = _PERIODO_DB_AUTO.get(periodo, periodo)
     lista_base  = db_picks_por_periodo(periodo_db)

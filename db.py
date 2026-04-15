@@ -724,6 +724,46 @@ def db_marcar_publicado(clave: str, valor: str) -> None:
 
 
 # ==============================
+# ALERTAS RECIENTES — LECTURA/ESCRITURA EN DB
+# ==============================
+
+def db_leer_alertas_recientes() -> dict:
+    """
+    Lee el dict alertas_recientes desde free_state (clave 'alertas_recientes').
+    Devuelve {} si no existe o falla.
+    """
+    import json as _json
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT valor FROM free_state WHERE clave = 'alertas_recientes' LIMIT 1;"
+                )
+                row = cur.fetchone()
+        if row:
+            return _json.loads(row["valor"])
+        return {}
+    except Exception as e:
+        logger.error(f"Error leyendo alertas_recientes de DB: {e}")
+        return {}
+
+
+def db_guardar_alertas_recientes(alertas: dict) -> None:
+    """Persiste alertas_recientes en free_state."""
+    import json as _json
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO free_state (clave, valor)
+                    VALUES ('alertas_recientes', %s)
+                    ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor;
+                """, (_json.dumps(alertas),))
+    except Exception as e:
+        logger.error(f"Error guardando alertas_recientes en DB: {e}")
+
+
+# ==============================
 # BANKROLL — LECTURA/ESCRITURA EN DB
 # ==============================
 
