@@ -88,15 +88,30 @@ def init_db() -> None:
                     mensaje_base      TEXT,
                     mensaje_base_free TEXT,
                     destinos_json     TEXT,
-                    odds              NUMERIC(5,2),
+                    odds              NUMERIC(6,2),
                     fecha             DATE         NOT NULL,
                     fecha_hora        TIMESTAMP    NOT NULL DEFAULT NOW()
                 );
             """)
 
-            # Columna odds puede no existir en instalaciones anteriores
+            # Columna odds: añadir si no existe y ampliar precisión en instalaciones antiguas
             cur.execute("""
-                ALTER TABLE picks ADD COLUMN IF NOT EXISTS odds NUMERIC(5,2);
+                ALTER TABLE picks ADD COLUMN IF NOT EXISTS odds NUMERIC(6,2);
+            """)
+            # Migración silenciosa: ampliar NUMERIC(5,2) → NUMERIC(6,2) si ya existe
+            # (ALTER TYPE solo se ejecuta si la precisión actual es menor)
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'picks'
+                          AND column_name = 'odds'
+                          AND numeric_precision = 5
+                    ) THEN
+                        ALTER TABLE picks ALTER COLUMN odds TYPE NUMERIC(6,2);
+                    END IF;
+                END $$;
             """)
             cur.execute("""
                 ALTER TABLE picks ADD COLUMN IF NOT EXISTS periodo_codigo TEXT;
@@ -161,6 +176,34 @@ def init_db() -> None:
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_picks_codigo
                 ON picks (codigo);
+            """)
+
+            # Índice para consultas de resultado (resúmenes, rachas)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_picks_resultado
+                ON picks (resultado);
+            """)
+
+            # Integridad: CHECK en tipo_pick para evitar valores inválidos.
+            # Se añade de forma segura (sin crash si la restricción ya existe
+            # o si hay datos que no la cumplen en instalaciones antiguas).
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'picks_tipo_pick_check'
+                    ) THEN
+                        BEGIN
+                            ALTER TABLE picks
+                                ADD CONSTRAINT picks_tipo_pick_check
+                                CHECK (tipo_pick IN ('gol', 'corner'));
+                        EXCEPTION WHEN check_violation THEN
+                            -- datos históricos con otro valor: se ignora la restricción
+                            NULL;
+                        END;
+                    END IF;
+                END $$;
             """)
 
             # Control de resúmenes ya publicados (evita duplicados tras reinicios)

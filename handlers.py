@@ -200,6 +200,17 @@ def _registro_publicado_desde_db(message_id_origen: int | str) -> dict | None:
 # ENVÍO / EDICIÓN TELEGRAM
 # ==============================
 
+_TELEGRAM_MAX_LEN = 4096   # límite de Telegram para mensajes de texto
+
+
+def _truncar_mensaje(texto: str) -> str:
+    """Recorta el mensaje a _TELEGRAM_MAX_LEN y añade aviso si se truncó."""
+    if len(texto) <= _TELEGRAM_MAX_LEN:
+        return texto
+    aviso = "\n\n⚠️ <i>[mensaje truncado]</i>"
+    return texto[: _TELEGRAM_MAX_LEN - len(aviso)] + aviso
+
+
 async def enviar_mensaje(
     context: ContextTypes.DEFAULT_TYPE,
     canal_id: int,
@@ -208,9 +219,11 @@ async def enviar_mensaje(
 ):
     """
     Envía un mensaje con reintentos automáticos:
+    - Trunca a 4096 chars antes de enviar (límite de Telegram).
     - RetryAfter (rate-limit de Telegram): espera el tiempo indicado y reintenta.
     - NetworkError: backoff exponencial (1s, 2s) entre intentos.
     """
+    texto = _truncar_mensaje(texto)
     for intento in range(max_intentos):
         try:
             return await context.bot.send_message(
@@ -237,12 +250,23 @@ async def enviar_mensaje(
                 raise
 
 
+# Mensajes de Telegram que indican que ya no es posible editar (>48h o borrado).
+# Son situaciones normales y esperadas — se loguean como INFO, no como ERROR.
+_ERRORES_EDICION_ESPERADOS = (
+    "message can't be edited",
+    "message to edit not found",
+    "message is not modified",
+    "there is no text in the message to edit",
+)
+
+
 async def editar_mensaje(
     context: ContextTypes.DEFAULT_TYPE,
     canal_id: int,
     message_id: int,
     texto_nuevo: str,
 ) -> None:
+    texto_nuevo = _truncar_mensaje(texto_nuevo)
     try:
         await context.bot.edit_message_text(
             chat_id=canal_id,
@@ -250,9 +274,26 @@ async def editar_mensaje(
             text=texto_nuevo,
             parse_mode="HTML",
         )
-        logger.info(f"Mensaje editado en canal {canal_id} (msg {message_id})")
+        logger.info("Mensaje editado en canal %s (msg %s)", canal_id, message_id)
+    except tg_error.BadRequest as e:
+        msg_lower = str(e).lower()
+        if any(esperado in msg_lower for esperado in _ERRORES_EDICION_ESPERADOS):
+            # Situación normal: el mensaje es demasiado antiguo, fue borrado,
+            # o el texto ya era idéntico. No es un error de programación.
+            logger.info(
+                "Mensaje %s en canal %s no editable (>48h o sin cambios): %s",
+                message_id, canal_id, e,
+            )
+        else:
+            logger.error(
+                "Error inesperado editando msg %s en canal %s: %s",
+                message_id, canal_id, e,
+            )
     except Exception as e:
-        logger.error(f"Error editando mensaje en {canal_id}: {e}")
+        logger.error(
+            "Error editando msg %s en canal %s: %s",
+            message_id, canal_id, e,
+        )
 
 
 # ==============================

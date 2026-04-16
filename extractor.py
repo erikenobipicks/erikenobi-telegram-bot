@@ -281,29 +281,6 @@ def detectar_linea_por_codigo(datos: dict) -> str | None:
     return partes[5].upper() if len(partes) >= 6 else None
 
 
-def detectar_historial_por_codigo(datos: dict) -> str | None:
-    partes = obtener_bloques_codigo(datos)
-    modo  = detectar_modo_por_codigo(datos)
-    linea = detectar_linea_por_codigo(datos)
-
-    if modo == "NEXTGOAL" and len(partes) >= 6:
-        valor = partes[5].upper()
-        if valor.isdigit():
-            return valor
-
-    if modo == "ASIAN" and linea == "+1" and len(partes) >= 7:
-        valor = partes[6].upper()
-        if valor.isdigit():
-            return valor
-
-    if modo in ("ASIAN+1", "SINGLE") and len(partes) >= 7:
-        valor = partes[6].upper()
-        if valor.isdigit():
-            return valor
-
-    return None
-
-
 # ==============================
 # FILTRO STRIKE LIGA
 # ==============================
