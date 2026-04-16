@@ -27,6 +27,7 @@ from extractor import (
 )
 from bankroll import get_bankroll, set_bankroll, leer_bankroll_excel
 from formateador import construir_mensaje_base, construir_mensaje_editado
+from clasificador_alertas import clasificar_alerta
 from free import debe_enviar_a_free, registrar_envio_free
 from utils import hoy_str
 from db import db_guardar_publicacion, db_pick_por_message_id
@@ -273,20 +274,34 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
                 )
                 return
 
-    # ── Picks LIVE — flujo normal ─────────────────────────────────────
-    # Canales destino
+    # ── Picks LIVE — clasificar antes de enrutar ──────────────────────
+    clasificacion = clasificar_alerta(datos, tipo_pick)
+    nivel         = clasificacion["nivel"]
+
+    logger.info(
+        "CLASIFICACIÓN | %s | nivel=%s (%s) | stake=%.1fu | partido=%s",
+        tipo_pick,
+        nivel,
+        clasificacion["nombre"],
+        clasificacion["stake"],
+        datos.get("partido"),
+    )
+
+    # Canal principal por tipo de pick
     canales_destino = []
     if tipo_pick == "corner":
         canales_destino.append(CANAL_CORNERS_ID)
     elif tipo_pick == "gol":
         canales_destino.append(CANAL_GOLES_ID)
-    if ENVIAR_A_GENERAL:
+
+    # Canal general — solo para picks FAVORABLE o superior (nivel >= 1)
+    if ENVIAR_A_GENERAL and nivel >= 1:
         canales_destino.append(CANAL_GENERAL_ID)
 
-    mensaje_base      = construir_mensaje_base(datos, tipo_pick)
-    mensaje_base_free = construir_mensaje_base(datos, tipo_pick, para_free=True)
+    mensaje_base      = construir_mensaje_base(datos, tipo_pick,                clasificacion=clasificacion)
+    mensaje_base_free = construir_mensaje_base(datos, tipo_pick, para_free=True, clasificacion=clasificacion)
 
-    logger.info(f"NUEVO | tipo: {tipo_pick} | origen msg_id: {msg_id} | destinos: {canales_destino}")
+    logger.info(f"NUEVO | tipo: {tipo_pick} | nivel: {clasificacion['nombre']} | origen msg_id: {msg_id} | destinos: {canales_destino}")
 
     destinos_publicados: dict[str, int] = {}
 
@@ -298,20 +313,23 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception as e:
             logger.error(f"Error enviando a {canal_id}: {e}")
 
-    # Canal FREE
+    # Canal FREE — solo para picks FAVORABLE o superior (nivel >= 1)
     enviado_a_free = False
-    ok_free, motivo_free = debe_enviar_a_free(tipo_pick, datos)
-    if ok_free:
-        try:
-            enviado_free = await enviar_mensaje(context, CANAL_FREE_ID, mensaje_base_free)
-            destinos_publicados[str(CANAL_FREE_ID)] = enviado_free.message_id
-            registrar_envio_free(tipo_pick, datos)
-            enviado_a_free = True
-            logger.info(f"Enviado a FREE {CANAL_FREE_ID} (msg {enviado_free.message_id})")
-        except Exception as e:
-            logger.error(f"Error enviando a FREE: {e}")
+    if nivel >= 1:
+        ok_free, motivo_free = debe_enviar_a_free(tipo_pick, datos)
+        if ok_free:
+            try:
+                enviado_free = await enviar_mensaje(context, CANAL_FREE_ID, mensaje_base_free)
+                destinos_publicados[str(CANAL_FREE_ID)] = enviado_free.message_id
+                registrar_envio_free(tipo_pick, datos)
+                enviado_a_free = True
+                logger.info(f"Enviado a FREE {CANAL_FREE_ID} (msg {enviado_free.message_id})")
+            except Exception as e:
+                logger.error(f"Error enviando a FREE: {e}")
+        else:
+            logger.info(f"No enviado a FREE: {motivo_free}")
     else:
-        logger.info(f"No enviado a FREE: {motivo_free}")
+        logger.info(f"Pick BAJO (nivel 0) — no se envía a GENERAL ni a FREE")
 
     # Guardar en estado
     STATE["mensajes_publicados"][str(msg_id)] = {

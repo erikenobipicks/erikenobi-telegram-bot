@@ -728,14 +728,58 @@ def _construir_pre(datos: dict, tipo_pick: str) -> str:
 # API PÚBLICA
 # ══════════════════════════════════════════════════════════════════════
 
+def _barra_stake(stake: float, max_stake: float = 3.0, bloques: int = 10) -> str:
+    """Barra visual proporcional al stake. Ej: stake=2 → ███████░░░"""
+    llenos = round((stake / max_stake) * bloques)
+    return "█" * llenos + "░" * (bloques - llenos)
+
+
+def _bloque_clasificacion(clasificacion: dict) -> str:
+    """
+    Construye la cabecera de nivel para insertar al inicio del mensaje.
+
+    Ejemplo:
+        🔵 <b>ÉLITE</b> — Nivel 3/3
+        ━━━━━━━━━━━━━━━━━━━━
+        💰 <b>Stake: 3.0u</b> ██████████   WR: 96.0% <i>(n=25)</i>
+        ━━━━━━━━━━━━━━━━━━━━
+    """
+    sep   = "━━━━━━━━━━━━━━━━━━━━"
+    emoji = clasificacion["emoji"]
+    nom   = clasificacion["nombre"]
+    nivel = clasificacion["nivel"]
+    stake = clasificacion["stake"]
+    wr    = clasificacion["wr"]
+    n     = clasificacion["n"]
+    adv   = clasificacion.get("advertencia")
+
+    if stake > 0:
+        barra      = _barra_stake(stake)
+        linea_stake = f"💰 <b>Stake: {stake}u</b>  {barra}   WR: {wr}% <i>(n={n})</i>"
+    else:
+        linea_stake = f"💰 <b>Stake: 0u</b> — no apostar   WR: {wr}% <i>(n={n})</i>"
+
+    if adv:
+        linea_stake += f"\n⚠️ <i>{adv}</i>"
+
+    return "\n".join([
+        f"{emoji} <b>{nom}</b> — Nivel {nivel}/3",
+        sep,
+        linea_stake,
+        sep,
+    ])
+
+
 def construir_mensaje_base(
     datos: dict,
     tipo_pick: str,
     para_free: bool = False,
+    clasificacion: dict | None = None,
 ) -> str:
     """
     Construye el mensaje inicial (sin resultado).
     para_free=True oculta las cuotas detalladas.
+    clasificacion=dict activa el bloque de nivel/stake al inicio.
     """
     fase = detectar_fase_por_codigo(datos) or ""
 
@@ -750,6 +794,11 @@ def construir_mensaje_base(
         # En free no mostramos cuotas detalladas
         msg = re.sub(r"\n📊 (?:Cuotas.*|1X2:.*)", "", msg)
         msg = re.sub(r"\n💰 Cuota.*", "", msg)
+
+    # Anteponer bloque de clasificación si está disponible
+    if clasificacion is not None:
+        cabecera = _bloque_clasificacion(clasificacion)
+        msg = cabecera + "\n" + msg.strip()
 
     return msg.strip()
 

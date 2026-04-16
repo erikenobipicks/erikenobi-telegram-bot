@@ -71,6 +71,14 @@ FINDE_CORNER_HORA_FIN     = 22
 FINDE_CORNER_STRIKE_MIN   = 85   # strike_alerta mínimo (%)
 
 # ==============================
+# CLASIFICADOR DE NIVELES
+# ==============================
+#
+# ÉLITE/ALTO/FAVORABLE/BAJO — stake sugerido según calidad del pick.
+# En nivel BAJO, stake = 0u si cuota_1 < CUOTA_MIN_BAJO.
+CUOTA_MIN_BAJO = float(os.getenv("CUOTA_MIN_BAJO", "1.70"))
+
+# ==============================
 # RACHA — NOTIFICACIONES
 # ==============================
 #
