@@ -35,6 +35,24 @@ _TERMINOS_ALTO = ["línea 3", "línea 4", "+1.5", "over 1.5", "cf3", "gf3", "cf4
 # Términos que excluyen nivel FAVORABLE
 _TERMINOS_EXCLUIDOS = ["línea 1", "over 0.5", "+0.5", "cf1", "gf1"]
 
+# ── Umbrales de clasificación — extraídos como constantes para facilitar
+#    su ajuste sin modificar la lógica interna. ────────────────────────────────
+
+# ÉLITE
+_ELITE_SL_MIN    = 80    # strike_liga mínimo (%)
+_ELITE_SL_MAX    = 90    # strike_liga máximo (%) — evita outliers estadísticos
+_ELITE_SA_MIN    = 77    # strike_alerta mínimo (%)
+_ELITE_MIN_MIN   = 45    # minuto mínimo
+_ELITE_MIN_MAX   = 72    # minuto máximo
+
+# ALTO
+_ALTO_CUOTA_MIN  = 1.40  # cuota local mínima
+_ALTO_CUOTA_MAX  = 2.20  # cuota local máxima
+
+# FAVORABLE
+_FAV_MOMENTUM_MIN = -10  # diferencia momentum (local − visitante) mínima
+_FAV_MIN_MAX      = 72   # minuto máximo
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # API pública
@@ -64,14 +82,14 @@ def clasificar_alerta(datos: dict, tipo_pick: str) -> dict:
 
     # ── ÉLITE — nivel 3 ───────────────────────────────────────────────
     if (
-        sl is not None and 80 <= sl <= 90
-        and sa is not None and sa >= 77
-        and 45 <= minuto <= 72
+        sl is not None and _ELITE_SL_MIN <= sl <= _ELITE_SL_MAX
+        and sa is not None and sa >= _ELITE_SA_MIN
+        and _ELITE_MIN_MIN <= minuto <= _ELITE_MIN_MAX
     ):
         razones = [
-            f"Strike liga: {sl}% (rango 80-90%)",
-            f"Strike alerta: {sa}% (≥ 77%)",
-            f"Minuto: {minuto}' (rango 45-72')",
+            f"Strike liga: {sl}% (rango {_ELITE_SL_MIN}-{_ELITE_SL_MAX}%)",
+            f"Strike alerta: {sa}% (≥ {_ELITE_SA_MIN}%)",
+            f"Minuto: {minuto}' (rango {_ELITE_MIN_MIN}-{_ELITE_MIN_MAX}')",
         ]
         return _resultado(3, 3.0, razones)
 
@@ -80,11 +98,11 @@ def clasificar_alerta(datos: dict, tipo_pick: str) -> dict:
     if (
         termino_alto is not None
         and cuota_1 is not None
-        and 1.40 <= cuota_1 <= 2.20
+        and _ALTO_CUOTA_MIN <= cuota_1 <= _ALTO_CUOTA_MAX
     ):
         razones = [
             f"Apuesta de alto valor: '{termino_alto}'",
-            f"Cuota local: {cuota_1} (rango 1.40-2.20)",
+            f"Cuota local: {cuota_1} (rango {_ALTO_CUOTA_MIN}-{_ALTO_CUOTA_MAX})",
         ]
         return _resultado(2, 2.0, razones)
 
@@ -92,10 +110,10 @@ def clasificar_alerta(datos: dict, tipo_pick: str) -> dict:
     excluido = next((t for t in _TERMINOS_EXCLUIDOS if t in texto_ef), None)
     if (
         excluido is None
-        and momentum_diff >= -10
-        and minuto <= 72
+        and momentum_diff >= _FAV_MOMENTUM_MIN
+        and minuto <= _FAV_MIN_MAX
     ):
-        razones = [f"Minuto: {minuto}' (≤ 72')"]
+        razones = [f"Minuto: {minuto}' (≤ {_FAV_MIN_MAX}')"]
         if ml is not None:
             razones.append(
                 f"Momentum: {ml}-{mv} (diferencia {momentum_diff:+})"
@@ -116,9 +134,9 @@ def clasificar_alerta(datos: dict, tipo_pick: str) -> dict:
     razones_bajo = ["No cumple criterios de niveles superiores"]
     if excluido:
         razones_bajo.append(f"Apuesta excluida: '{excluido}'")
-    if minuto > 72:
-        razones_bajo.append(f"Minuto {minuto}' fuera de rango (> 72')")
-    if momentum_diff < -10:
+    if minuto > _FAV_MIN_MAX:
+        razones_bajo.append(f"Minuto {minuto}' fuera de rango (> {_FAV_MIN_MAX}')")
+    if momentum_diff < _FAV_MOMENTUM_MIN:
         razones_bajo.append(f"Momentum desfavorable ({momentum_diff:+})")
 
     return _resultado(0, stake, razones_bajo, advertencia=advert)

@@ -210,34 +210,47 @@ def db_registrar_pick(
     fecha_hora: str,
     odds: float | None = None,
 ) -> None:
-    try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO picks (
-                        message_id_origen, codigo, tipo_pick, periodo_codigo, modo_codigo,
-                        linea_codigo, liga, partido,
-                        strike_alerta, strike_liga, strike_alerta_pct, strike_liga_pct,
-                        resultado, enviado_a_free, minuto_alerta, goles_entrada_total,
-                        corners_entrada_total, red_cards_entrada_total,
-                        momentum_local, momentum_visitante, odds, fecha, fecha_hora
-                    )
-                    VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                    )
-                    ON CONFLICT (message_id_origen) DO NOTHING;
-                """, (
-                    message_id_origen, codigo, tipo_pick, periodo_codigo, modo_codigo,
-                    linea_codigo, liga, partido,
-                    strike_alerta, strike_liga, strike_alerta_pct, strike_liga_pct,
-                    enviado_a_free, minuto_alerta, goles_entrada_total,
-                    corners_entrada_total, red_cards_entrada_total,
-                    momentum_local, momentum_visitante, odds, fecha, fecha_hora,
-                ))
-        logger.debug(f"Pick guardado en DB: {message_id_origen}")
-    except Exception as e:
-        logger.error(f"Error guardando pick en DB: {e}")
+    params = (
+        message_id_origen, codigo, tipo_pick, periodo_codigo, modo_codigo,
+        linea_codigo, liga, partido,
+        strike_alerta, strike_liga, strike_alerta_pct, strike_liga_pct,
+        enviado_a_free, minuto_alerta, goles_entrada_total,
+        corners_entrada_total, red_cards_entrada_total,
+        momentum_local, momentum_visitante, odds, fecha, fecha_hora,
+    )
+    # Un reintento automático ante fallos transitorios de red/DB
+    for intento in range(2):
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO picks (
+                            message_id_origen, codigo, tipo_pick, periodo_codigo, modo_codigo,
+                            linea_codigo, liga, partido,
+                            strike_alerta, strike_liga, strike_alerta_pct, strike_liga_pct,
+                            resultado, enviado_a_free, minuto_alerta, goles_entrada_total,
+                            corners_entrada_total, red_cards_entrada_total,
+                            momentum_local, momentum_visitante, odds, fecha, fecha_hora
+                        )
+                        VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                        ON CONFLICT (message_id_origen) DO NOTHING;
+                    """, params)
+            logger.debug(f"Pick guardado en DB: {message_id_origen}")
+            return
+        except Exception as e:
+            if intento == 0:
+                logger.warning(
+                    "Reintentando guardado del pick %s tras error: %s",
+                    message_id_origen, e,
+                )
+            else:
+                logger.error(
+                    "Error definitivo guardando pick %s en DB: %s",
+                    message_id_origen, e,
+                )
 
 
 # ==============================

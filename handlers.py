@@ -98,6 +98,15 @@ def _purga_alertas_recientes() -> None:
             recientes.pop(clave, None)
 
 
+def purgar_alertas_recientes() -> None:
+    """
+    Versión pública de _purga_alertas_recientes.
+    Llamada periódicamente desde main.py para limpiar el dict incluso
+    cuando no llegan picks nuevos (ej: noches sin actividad).
+    """
+    _purga_alertas_recientes()
+
+
 def _es_alerta_duplicada(datos: dict, tipo_pick: str) -> bool:
     """
     Devuelve True si:

@@ -1,6 +1,8 @@
 import json
 import copy
 import logging
+import os
+import tempfile
 
 from config import STATE_FILE, DEFAULT_STATE
 
@@ -24,15 +26,26 @@ def save_state() -> None:
     except Exception as e:
         logger.error(f"Error guardando alertas_recientes en DB: {e}")
 
-    # Backup en JSON local
+    # Backup en JSON local — escritura atómica (tmp + rename) para evitar
+    # corrupción si el proceso se interrumpe durante el write.
     try:
         ligero = {
             "mensajes_publicados": STATE.get("mensajes_publicados", {}),
             "alertas_recientes":   STATE.get("alertas_recientes", {}),
         }
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(ligero, f, ensure_ascii=False, indent=2)
-        logger.debug("Estado volátil guardado en disco.")
+        dir_estado = os.path.dirname(os.path.abspath(STATE_FILE)) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=dir_estado, suffix=".tmp", prefix="state_")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(ligero, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, STATE_FILE)   # atómico en POSIX y Windows (≥3.3)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+        logger.debug("Estado volátil guardado en disco (escritura atómica).")
     except Exception as e:
         logger.error(f"Error guardando estado en disco: {e}")
 

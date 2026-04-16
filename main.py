@@ -18,6 +18,7 @@ from handlers import (
     handler_nuevo,
     handler_editado,
     limpiar_mensajes_publicados,
+    purgar_alertas_recientes,
     cmd_resumen_hoy,
     cmd_resumen_semana,
     cmd_resumen_mes,
@@ -160,6 +161,12 @@ def main() -> None:
         from state import save_state as _sv
         _sv()
 
+    async def job_purgar_alertas(ctx):
+        """Purga alertas_recientes antiguas aunque no lleguen picks nuevos."""
+        purgar_alertas_recientes()
+        from state import save_state as _sv
+        _sv()
+
     # Diario: 23:45 todos los días
     app.job_queue.run_daily(
         callback = job_resumen_diario,
@@ -197,6 +204,14 @@ def main() -> None:
         interval = 12 * 60 * 60,
         first    = 300,
         name     = "limpiar_state",
+    )
+    # Purga de alertas_recientes antiguas cada 4 horas (evita crecimiento
+    # del dict en noches/periodos sin actividad)
+    app.job_queue.run_repeating(
+        callback = job_purgar_alertas,
+        interval = 4 * 60 * 60,
+        first    = 120,
+        name     = "purgar_alertas",
     )
 
     logger.info("Bot iniciado — escuchando mensajes nuevos y editados.")
