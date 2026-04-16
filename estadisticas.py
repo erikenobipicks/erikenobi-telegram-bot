@@ -353,15 +353,12 @@ def _construir_resumen_anual(lista: list) -> str:
 def _clave_periodo(periodo: str) -> str:
     ahora = ahora_madrid()
     if periodo == "dia":
-        return (ahora - timedelta(days=1)).strftime("%Y-%m-%d")
+        return ahora.strftime("%Y-%m-%d")
     if periodo == "semana":
-        ref = ahora - timedelta(days=1)
-        year, week, _ = ref.isocalendar()
+        year, week, _ = ahora.isocalendar()
         return f"{year}-W{week}"
     if periodo == "mes":
-        primer_dia = ahora.replace(day=1)
-        mes_anterior = primer_dia - timedelta(days=1)
-        return mes_anterior.strftime("%Y-%m")
+        return ahora.strftime("%Y-%m")
     return ""
 
 
@@ -389,8 +386,8 @@ _PERIODO_DB = {
 }
 
 _PERIODO_DB_AUTO = {
-    "dia":    "ayer",
-    "semana": "semana_anterior",
+    "dia":    "dia",
+    "semana": "semana",
     "mes":    "mes_anterior",
     "anio":   "anio",
 }
@@ -405,6 +402,20 @@ def _titulo_resumen(periodo: str, tipo_pick, label: str) -> str:
 # ==============================
 
 async def publicar_resumenes_si_toca(context, periodo: str) -> None:
+    # ── Compuerta horaria ────────────────────────────────────────────
+    # Evita publicar resúmenes parciales si el job se dispara fuera de hora.
+    ahora_local = ahora_madrid()
+    if periodo == "dia" and ahora_local.hour < 23:
+        logger.debug(f"Resumen diario: hora {ahora_local.hour}h < 23h, se pospone.")
+        return
+    if periodo == "semana" and (ahora_local.weekday() != 0 or ahora_local.hour < 23):
+        logger.debug(f"Resumen semanal: no es lunes ≥ 23h, se pospone.")
+        return
+    if periodo == "mes" and (ahora_local.day != 1 or ahora_local.hour < 9):
+        logger.debug(f"Resumen mensual: no es día 1 ≥ 9h, se pospone.")
+        return
+    # ────────────────────────────────────────────────────────────────
+
     clave_valor = _clave_periodo(periodo)
     periodo_db  = _PERIODO_DB_AUTO.get(periodo, periodo)
     lista_base  = db_picks_por_periodo(periodo_db)
@@ -423,7 +434,6 @@ async def publicar_resumenes_si_toca(context, periodo: str) -> None:
 
         if not lista:
             logger.info(f"Resumen {resumen_id}/{periodo}: sin picks, se omite.")
-            db_marcar_publicado(clave_control, clave_valor)
             continue
 
         titulo = _titulo_resumen(periodo, tipo_pick, label)
