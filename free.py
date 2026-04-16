@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from config import (
@@ -8,6 +9,11 @@ from utils import ahora_madrid, hoy_str, clave_hora_actual_free
 from db import db_leer_free_state, db_guardar_free_state
 
 logger = logging.getLogger(__name__)
+
+# Lock que garantiza que el check y el register del canal FREE se ejecutan
+# como una sola operación atómica. Previene que dos picks simultáneos
+# burlen el límite de cupos al leer el mismo estado antes de actualizarlo.
+_free_lock = asyncio.Lock()
 
 
 # ==============================
@@ -106,3 +112,21 @@ def registrar_envio_free(tipo_pick: str, datos: dict) -> None:
         fs["goles_enviados"], MAX_FREE_GOLES,
         fs["corners_enviados"], MAX_FREE_CORNERS,
     )
+
+
+async def intentar_envio_free(tipo_pick: str, datos: dict) -> tuple[bool, str]:
+    """
+    Versión atómica de debe_enviar_a_free + registrar_envio_free.
+
+    Usa asyncio.Lock para garantizar que el check y el register se ejecutan
+    como una operación indivisible: si dos picks llegan casi simultáneamente,
+    el segundo espera a que el primero termine de reservar su slot antes
+    de evaluar si todavía hay cupo.
+
+    Devuelve (True, "OK") si el slot fue reservado, o (False, motivo) si no.
+    """
+    async with _free_lock:
+        ok, motivo = debe_enviar_a_free(tipo_pick, datos)
+        if ok:
+            registrar_envio_free(tipo_pick, datos)
+        return ok, motivo

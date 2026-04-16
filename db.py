@@ -3,10 +3,37 @@ import logging
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+# ==============================
+# POOL DE CONEXIONES
+# ==============================
+
+_pool: ConnectionPool | None = None
+
+
+def init_pool() -> None:
+    """
+    Inicializa el pool de conexiones PostgreSQL.
+    Llamar UNA vez al arrancar el bot, antes de init_db().
+    El pool reutiliza conexiones en lugar de abrir una nueva por query,
+    evitando agotar el límite de conexiones de Railway.
+    """
+    global _pool
+    if not DATABASE_URL:
+        raise ValueError("Falta DATABASE_URL en variables de entorno.")
+    _pool = ConnectionPool(
+        conninfo=DATABASE_URL,
+        min_size=1,
+        max_size=5,
+        kwargs={"row_factory": dict_row},
+    )
+    _pool.wait()  # espera hasta que min_size conexiones estén listas
+    logger.info("Pool de conexiones DB inicializado (min=1, max=5).")
 
 
 # ==============================
@@ -14,6 +41,12 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # ==============================
 
 def get_conn():
+    """
+    Devuelve una conexión del pool (si está inicializado) o una conexión
+    directa como fallback. Compatible con el patrón 'with get_conn() as conn:'.
+    """
+    if _pool is not None:
+        return _pool.connection()
     if not DATABASE_URL:
         raise ValueError("Falta DATABASE_URL en variables de entorno.")
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)

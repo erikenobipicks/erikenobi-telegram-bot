@@ -29,7 +29,7 @@ from extractor import (
 from bankroll import get_bankroll, set_bankroll, leer_bankroll_excel
 from formateador import construir_mensaje_base, construir_mensaje_editado
 from clasificador_alertas import clasificar_alerta
-from free import debe_enviar_a_free, registrar_envio_free
+from free import intentar_envio_free
 from utils import hoy_str
 from db import db_guardar_publicacion, db_pick_por_message_id
 from estadisticas import (
@@ -60,13 +60,19 @@ def _normalizar_alerta(valor: str | None) -> str:
 
 def _clave_duplicado(datos: dict, tipo_pick: str) -> str:
     """
-    Clave laxa para detectar el mismo pick de un partido:
-    tipo + periodo + partido. Ignora modo/línea para capturar
-    picks distintos del mismo partido en la misma ventana temporal.
+    Clave para detectar el mismo pick reenviado en la ventana de tiempo:
+    tipo + periodo + modo + línea + partido.
+
+    Incluye modo y línea para que picks distintos del mismo partido
+    (ej: corner +1 vs corner over 2) no se bloqueen entre sí.
+    La clave exacta (_clave_alerta_reciente) cubre el bloqueo de 24h
+    para picks idénticos.
     """
     partido = _normalizar_alerta(datos.get("partido"))
     periodo = _normalizar_alerta(detectar_periodo_por_codigo(datos))
-    return "|".join([tipo_pick.upper(), periodo, partido])
+    modo    = _normalizar_alerta(detectar_modo_por_codigo(datos))
+    linea   = _normalizar_alerta(detectar_linea_por_codigo(datos))
+    return "|".join([tipo_pick.upper(), periodo, modo, linea, partido])
 
 
 def _clave_alerta_reciente(datos: dict, tipo_pick: str) -> str:
@@ -364,14 +370,15 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
             logger.error(f"Error enviando a {canal_id}: {e}")
 
     # Canal FREE — solo para picks FAVORABLE o superior (nivel >= 1)
+    # intentar_envio_free hace el check+register de forma atómica (asyncio.Lock)
+    # para evitar que dos picks simultáneos burlen el límite de cupos.
     enviado_a_free = False
     if nivel >= 1:
-        ok_free, motivo_free = debe_enviar_a_free(tipo_pick, datos)
+        ok_free, motivo_free = await intentar_envio_free(tipo_pick, datos)
         if ok_free:
             try:
                 enviado_free = await enviar_mensaje(context, CANAL_FREE_ID, mensaje_base_free)
                 destinos_publicados[str(CANAL_FREE_ID)] = enviado_free.message_id
-                registrar_envio_free(tipo_pick, datos)
                 enviado_a_free = True
                 logger.info(f"Enviado a FREE {CANAL_FREE_ID} (msg {enviado_free.message_id})")
             except Exception as e:

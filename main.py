@@ -13,7 +13,7 @@ from telegram.ext import (
 
 from config import TOKEN
 from state import load_state, STATE
-from db import init_db, migrar_desde_json
+from db import init_db, init_pool, migrar_desde_json
 from handlers import (
     handler_nuevo,
     handler_editado,
@@ -81,8 +81,9 @@ def main() -> None:
         logger.critical("BOT_TOKEN no definido. Exporta la variable de entorno y vuelve a intentarlo.")
         sys.exit(1)
 
-    # Inicializar DB (crea tablas si no existen)
+    # Inicializar pool de conexiones y luego las tablas
     try:
+        init_pool()
         init_db()
     except Exception as e:
         logger.critical(f"No se pudo conectar a la base de datos: {e}")

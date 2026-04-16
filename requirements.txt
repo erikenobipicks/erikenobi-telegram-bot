@@ -1,5 +1,5 @@
 python-telegram-bot[job-queue]==22.7
 aiohttp>=3.9
-psycopg[binary]>=3.1
+psycopg[binary,pool]>=3.1
 openpyxl>=3.1
 requests>=2.33
