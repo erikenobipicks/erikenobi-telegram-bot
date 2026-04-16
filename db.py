@@ -926,6 +926,72 @@ def db_guardar_free_state(estado: dict) -> None:
 
 
 # ==============================
+# SCORING ESTADÍSTICO
+# ==============================
+
+def db_score_por_dimension(
+    tipo_pick: str,
+    codigo: str | None = None,
+    liga: str | None = None,
+    hora: int | None = None,
+    minuto_min: int | None = None,
+    minuto_max: int | None = None,
+    dias: int = 90,
+) -> tuple[int, int]:
+    """
+    Devuelve (hits, total) de picks resueltos para la dimensión indicada.
+    Solo se aplica un filtro de dimensión por llamada; el resto son None.
+    Usado por scorer.py para calcular el score estadístico de cada alerta.
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                condiciones = [
+                    "resultado IN ('HIT', 'MISS')",
+                    "tipo_pick = %s",
+                    "fecha >= (CURRENT_DATE - (%s * INTERVAL '1 day')::INTERVAL)::date",
+                ]
+                params: list = [tipo_pick, dias]
+
+                if codigo is not None:
+                    condiciones.append("codigo = %s")
+                    params.append(codigo)
+
+                if liga is not None:
+                    condiciones.append("liga ILIKE %s")
+                    params.append(liga)
+
+                if hora is not None:
+                    condiciones.append(
+                        "EXTRACT(HOUR FROM (fecha_hora AT TIME ZONE 'Europe/Madrid')) = %s"
+                    )
+                    params.append(hora)
+
+                if minuto_min is not None and minuto_max is not None:
+                    condiciones.append("minuto_alerta BETWEEN %s AND %s")
+                    params.extend([minuto_min, minuto_max])
+
+                where = " AND ".join(condiciones)
+                cur.execute(
+                    f"""
+                    SELECT
+                        SUM(CASE WHEN resultado = 'HIT' THEN 1 ELSE 0 END) AS hits,
+                        COUNT(*) AS total
+                    FROM picks
+                    WHERE {where};
+                    """,
+                    params,
+                )
+                row = cur.fetchone()
+                if row and row["total"]:
+                    return int(row["hits"] or 0), int(row["total"])
+                return 0, 0
+    except Exception as e:
+        logger.error(f"Error en db_score_por_dimension: {e}")
+        return 0, 0
+
+
+# ==============================
 # MIGRACIÓN DESDE JSON
 # ==============================
 

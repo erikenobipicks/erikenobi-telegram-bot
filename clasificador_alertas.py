@@ -10,8 +10,13 @@ Clasifica una alerta (datos dict del extractor) en 4 niveles:
 
 Usa directamente el dict devuelto por extraer_datos() y las funciones
 de detección de extractor.py — sin parsers ni dependencias adicionales.
+
+Tras la clasificación por reglas, el motor estadístico interno (scorer.py)
+calcula un score 0–100 basado en el historial de la DB y ajusta el stake
+±0.5u cuando la confianza es media/alta.
 """
 
+import logging
 import re
 
 from utils import parse_percent, parse_dupla_numerica
@@ -20,6 +25,8 @@ from extractor import (
     detectar_modo_por_codigo,
 )
 from config import CUOTA_MIN_BAJO
+
+logger = logging.getLogger(__name__)
 
 # ── Metadatos históricos ───────────────────────────────────────────────────────
 _NIVELES = {
@@ -64,12 +71,42 @@ def clasificar_alerta(datos: dict, tipo_pick: str) -> dict:
         nivel       int         0-3
         nombre      str         ÉLITE / ALTO / FAVORABLE / BAJO
         emoji       str         🔵 🟢 🟡 🔴
-        stake       float       unidades sugeridas
+        stake       float       unidades sugeridas (ajustado por score)
         razones     list[str]   explicación del nivel asignado
         wr          float       win rate histórico (%)
         n           int         tamaño de muestra
         advertencia str | None  aviso adicional
+        score_info  dict | None resultado del motor estadístico interno
     """
+    resultado = _clasificar_base(datos, tipo_pick)
+
+    # ── Motor estadístico interno ─────────────────────────────────────
+    # Importación diferida para evitar ciclos en el arranque
+    try:
+        from scorer import calcular_score
+        score_info = calcular_score(datos, tipo_pick)
+        resultado["score_info"] = score_info
+
+        delta = score_info.get("stake_delta", 0.0)
+        if delta != 0.0:
+            nuevo_stake = max(0.0, min(3.0, resultado["stake"] + delta))
+            resultado["stake"] = round(nuevo_stake, 1)
+            logger.debug(
+                "Score %s (%s) → stake ajustado %+.1fu → %.1fu",
+                score_info["score"],
+                score_info["confianza"],
+                delta,
+                resultado["stake"],
+            )
+    except Exception as e:
+        logger.warning("Error en motor estadístico: %s", e)
+        resultado["score_info"] = None
+
+    return resultado
+
+
+def _clasificar_base(datos: dict, tipo_pick: str) -> dict:
+    """Clasificación por reglas fijas (sin score estadístico)."""
     texto_ef = _texto_efectivo(datos)
     minuto   = datos.get("minuto") or 0
 

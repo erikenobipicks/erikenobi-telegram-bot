@@ -738,10 +738,17 @@ def _bloque_clasificacion(clasificacion: dict) -> str:
     """
     Construye la cabecera de nivel para insertar al inicio del mensaje.
 
-    Ejemplo:
+    Ejemplo (sin score):
         🔵 <b>ÉLITE</b> — Nivel 3/3
         ━━━━━━━━━━━━━━━━━━━━
         💰 <b>Stake: 3.0u</b> ██████████   WR: 96.0% <i>(n=25)</i>
+        ━━━━━━━━━━━━━━━━━━━━
+
+    Ejemplo (con score estadístico):
+        🟢 <b>ALTO</b> — Nivel 2/3
+        ━━━━━━━━━━━━━━━━━━━━
+        💰 <b>Stake: 2.5u</b> ████████░░   WR: 86.3% <i>(n=51)</i>
+        🔬 Score histórico: <b>81/100</b> <i>(alta)</i>
         ━━━━━━━━━━━━━━━━━━━━
     """
     sep   = "━━━━━━━━━━━━━━━━━━━━"
@@ -752,9 +759,10 @@ def _bloque_clasificacion(clasificacion: dict) -> str:
     wr    = clasificacion["wr"]
     n     = clasificacion["n"]
     adv   = clasificacion.get("advertencia")
+    score_info = clasificacion.get("score_info")
 
     if stake > 0:
-        barra      = _barra_stake(stake)
+        barra       = _barra_stake(stake)
         linea_stake = f"💰 <b>Stake: {stake}u</b>  {barra}   WR: {wr}% <i>(n={n})</i>"
     else:
         linea_stake = f"💰 <b>Stake: 0u</b> — no apostar   WR: {wr}% <i>(n={n})</i>"
@@ -762,12 +770,21 @@ def _bloque_clasificacion(clasificacion: dict) -> str:
     if adv:
         linea_stake += f"\n⚠️ <i>{adv}</i>"
 
-    return "\n".join([
+    lineas = [
         f"{emoji} <b>{nom}</b> — Nivel {nivel}/3",
         sep,
         linea_stake,
-        sep,
-    ])
+    ]
+
+    # Score estadístico — solo visible cuando hay suficiente historial
+    if score_info and score_info.get("confianza") in ("media", "alta"):
+        sc        = score_info["score"]
+        confianza = score_info["confianza"]
+        sc_emoji  = "🔬" if confianza == "alta" else "📐"
+        lineas.append(f"{sc_emoji} Score histórico: <b>{sc}/100</b> <i>({confianza})</i>")
+
+    lineas.append(sep)
+    return "\n".join(lineas)
 
 
 def construir_mensaje_base(
