@@ -17,6 +17,7 @@ from db import init_db, migrar_desde_json
 from handlers import (
     handler_nuevo,
     handler_editado,
+    limpiar_mensajes_publicados,
     cmd_resumen_hoy,
     cmd_resumen_semana,
     cmd_resumen_mes,
@@ -90,6 +91,11 @@ def main() -> None:
     # Cargar estado volátil desde disco
     load_state()
 
+    # Limpieza preventiva: recortar STATE si creció demasiado entre reinicios
+    limpiar_mensajes_publicados()
+    from state import save_state as _save
+    _save()
+
     # Migración automática: si el JSON tiene estadísticas del sistema anterior,
     # las importamos a la DB y las vaciamos del JSON para no duplicar.
     estadisticas_json = STATE.get("estadisticas", [])
@@ -148,6 +154,11 @@ def main() -> None:
     async def job_revision_pendientes_retrasados(ctx):
         await notificar_picks_pendientes_retrasados(ctx)
 
+    async def job_limpiar_state(ctx):
+        limpiar_mensajes_publicados()
+        from state import save_state as _sv
+        _sv()
+
     # Diario: 23:45 todos los días
     app.job_queue.run_daily(
         callback = job_resumen_diario,
@@ -178,6 +189,13 @@ def main() -> None:
         interval = 6 * 60 * 60,
         first    = 60,
         name     = "revision_pendientes_retrasados",
+    )
+    # Limpieza preventiva de STATE cada 12 horas
+    app.job_queue.run_repeating(
+        callback = job_limpiar_state,
+        interval = 12 * 60 * 60,
+        first    = 300,
+        name     = "limpiar_state",
     )
 
     logger.info("Bot iniciado — escuchando mensajes nuevos y editados.")

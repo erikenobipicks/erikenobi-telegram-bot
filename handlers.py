@@ -1,10 +1,11 @@
+import asyncio
 import logging
 import os
 import tempfile
 import json
 from datetime import datetime, timezone
 
-from telegram import Update
+from telegram import Update, error as tg_error
 from telegram.ext import ContextTypes
 
 from config import (
@@ -134,6 +135,26 @@ def _registrar_alerta_reciente(datos: dict, tipo_pick: str) -> None:
         recientes[clave_laxa] = ahora_ts
 
 
+# ── Límite de tamaño del STATE ────────────────────────────────────────────────
+
+_MAX_MENSAJES_PUBLICADOS = 500
+
+
+def limpiar_mensajes_publicados() -> None:
+    """
+    Recorta STATE['mensajes_publicados'] a las últimas _MAX_MENSAJES_PUBLICADOS
+    entradas para evitar crecimiento ilimitado en memoria.
+    Los dicts de Python mantienen orden de inserción (≥3.7), así que eliminamos
+    las claves más antiguas (al principio del dict).
+    """
+    publicados = STATE.get("mensajes_publicados", {})
+    exceso = len(publicados) - _MAX_MENSAJES_PUBLICADOS
+    if exceso > 0:
+        for clave in list(publicados.keys())[:exceso]:
+            del publicados[clave]
+        logger.debug("STATE limpiado: %d entradas antiguas de mensajes_publicados eliminadas.", exceso)
+
+
 def _registro_publicado_desde_db(message_id_origen: int | str) -> dict | None:
     pick = db_pick_por_message_id(str(message_id_origen))
     if not pick:
@@ -164,12 +185,41 @@ def _registro_publicado_desde_db(message_id_origen: int | str) -> dict | None:
 # ENVÍO / EDICIÓN TELEGRAM
 # ==============================
 
-async def enviar_mensaje(context: ContextTypes.DEFAULT_TYPE, canal_id: int, texto: str):
-    return await context.bot.send_message(
-        chat_id=canal_id,
-        text=texto,
-        parse_mode="HTML",
-    )
+async def enviar_mensaje(
+    context: ContextTypes.DEFAULT_TYPE,
+    canal_id: int,
+    texto: str,
+    max_intentos: int = 3,
+):
+    """
+    Envía un mensaje con reintentos automáticos:
+    - RetryAfter (rate-limit de Telegram): espera el tiempo indicado y reintenta.
+    - NetworkError: backoff exponencial (1s, 2s) entre intentos.
+    """
+    for intento in range(max_intentos):
+        try:
+            return await context.bot.send_message(
+                chat_id=canal_id,
+                text=texto,
+                parse_mode="HTML",
+            )
+        except tg_error.RetryAfter as e:
+            espera = int(e.retry_after) + 1
+            logger.warning(
+                "Rate limit Telegram en canal %s — esperando %ds (intento %d/%d)",
+                canal_id, espera, intento + 1, max_intentos,
+            )
+            await asyncio.sleep(espera)
+        except tg_error.NetworkError as e:
+            if intento < max_intentos - 1:
+                espera = 2 ** intento
+                logger.warning(
+                    "Error de red enviando a %s: %s — reintentando en %ds (intento %d/%d)",
+                    canal_id, e, espera, intento + 1, max_intentos,
+                )
+                await asyncio.sleep(espera)
+            else:
+                raise
 
 
 async def editar_mensaje(
@@ -377,14 +427,19 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
 
     key = str(msg_id)
 
-    # ── Caso normal: tenemos el registro en STATE ─────────────────────
+    # tipo_pick se determina según la fuente disponible; siempre se inicializa
+    tipo_pick = detectar_tipo_pick_por_codigo(datos) or "desconocido"
+
+    # ── Caso 1: registro en STATE (arranque normal) ───────────────────
     if key in STATE["mensajes_publicados"]:
         registro  = STATE["mensajes_publicados"][key]
         tipo_pick = registro["tipo_pick"]
         destinos  = registro["destinos"]
 
-        logger.info(f"EDITADO | tipo: {tipo_pick} | resultado: {datos.get('resultado')}")
-
+        logger.info(
+            "EDITADO | tipo: %s | resultado: %s | msg_id: %s",
+            tipo_pick, datos.get("resultado"), msg_id,
+        )
         for canal_id_str, msg_id_publicado in destinos.items():
             base = (
                 registro["mensaje_base_free"]
@@ -394,18 +449,8 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
             texto_editado = construir_mensaje_editado(base, datos, tipo_pick)
             await editar_mensaje(context, int(canal_id_str), msg_id_publicado, texto_editado)
 
-    # ── Caso tardío: el bot se reinició y perdimos el STATE ───────────
-    # No podemos editar los mensajes en los canales destino porque no
-    # tenemos los message_id, pero sí podemos actualizar la estadística
-    # en la base de datos para que los resúmenes sean correctos.
+    # ── Caso 2: bot se reinició y perdimos el STATE → recuperar de DB ─
     else:
-        tipo_pick = detectar_tipo_pick_por_codigo(datos) or "desconocido"
-        logger.warning(
-            f"EDITADO TARDÍO | msg_id: {msg_id} | resultado: {datos.get('resultado')} | "
-            f"Sin referencia en STATE — solo se actualiza la DB."
-        )
-
-    if key not in STATE["mensajes_publicados"]:
         registro_db = _registro_publicado_desde_db(msg_id)
         if registro_db:
             tipo_pick = registro_db["tipo_pick"]
@@ -419,8 +464,14 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
                 await editar_mensaje(context, int(canal_id_str), int(msg_id_publicado), texto_editado)
             STATE["mensajes_publicados"][key] = registro_db
             logger.warning(
-                f"EDITADO TARDIO RECUPERADO | msg_id: {msg_id} | resultado: {datos.get('resultado')} | "
-                f"Reconstruido desde DB."
+                "EDITADO RECUPERADO DE DB | msg_id: %s | resultado: %s",
+                msg_id, datos.get("resultado"),
+            )
+        else:
+            logger.warning(
+                "EDITADO SIN REFERENCIA | msg_id: %s | resultado: %s | "
+                "Sin registro en STATE ni en DB — solo se actualiza la estadística.",
+                msg_id, datos.get("resultado"),
             )
 
     actualizado = actualizar_resultado_estadistica(msg_id, datos.get("resultado"))

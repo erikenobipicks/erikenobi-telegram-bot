@@ -207,23 +207,6 @@ def db_registrar_pick(
         logger.error(f"Error guardando pick en DB: {e}")
 
 
-def db_actualizar_resultado(message_id_origen: str, resultado: str) -> bool:
-    try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE picks
-                    SET resultado = %s
-                    WHERE message_id_origen = %s;
-                """, (resultado, message_id_origen))
-                actualizado = (cur.rowcount or 0) > 0
-        logger.debug(f"Resultado actualizado en DB: {message_id_origen} → {resultado}")
-        return actualizado
-    except Exception as e:
-        logger.error(f"Error actualizando resultado en DB: {e}")
-        return False
-
-
 # ==============================
 # PICKS — LECTURA / FILTROS
 # ==============================
@@ -892,7 +875,7 @@ def migrar_desde_json(estadisticas: list) -> int:
             # Actualizar resultado si ya lo tiene
             resultado = item.get("resultado")
             if resultado:
-                db_actualizar_resultado(
+                db_actualizar_resultado_confirmado(
                     str(item.get("message_id_origen", "")),
                     resultado,
                 )

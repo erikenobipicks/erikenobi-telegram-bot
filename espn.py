@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import unicodedata
@@ -217,6 +218,15 @@ def _estado_completado(event: dict) -> bool:
 
 
 async def resolver_corner_pick_espn(pick: dict) -> dict | None:
+    """
+    Wrapper async: delega el trabajo bloqueante (requests) al thread pool
+    para no congelar el event loop de Telegram.
+    """
+    return await asyncio.to_thread(_resolver_corner_pick_espn_sync, pick)
+
+
+def _resolver_corner_pick_espn_sync(pick: dict) -> dict | None:
+    """Versión síncrona — se ejecuta en un hilo separado via asyncio.to_thread."""
     periodo = (pick.get("periodo_codigo") or "FT").upper()
     if periodo not in ("FT", "HT"):
         return None
