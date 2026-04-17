@@ -754,7 +754,7 @@ def _bloque_clasificacion(clasificacion: dict) -> str:
         🔬 Score histórico: <b>81/100</b> <i>(alta)</i>
         ━━━━━━━━━━━━━━━━━━━━
     """
-    sep   = "━━━━━━━━━━━━━━━━━━━━"
+    sep   = "━━━━━━━━━━━━━━━━━"
     emoji = clasificacion["emoji"]
     nom   = clasificacion["nombre"]
     nivel = clasificacion["nivel"]
