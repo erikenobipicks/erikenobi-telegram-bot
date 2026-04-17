@@ -30,7 +30,7 @@ from bankroll import get_bankroll, set_bankroll, leer_bankroll_excel
 from formateador import construir_mensaje_base, construir_mensaje_editado
 from clasificador_alertas import clasificar_alerta
 from free import intentar_envio_free
-from utils import hoy_str
+from utils import hoy_str, ahora_madrid
 from db import db_guardar_publicacion, db_pick_por_message_id
 from estadisticas import (
     registrar_pick_estadistica,
@@ -392,6 +392,18 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
         clasificacion["stake"],
         datos.get("partido"),
     )
+
+    # ── Filtro de bajo perfil entre semana ────────────────────────────
+    # Los picks BAJO (nivel 0) solo se publican en fin de semana
+    # (sábado y domingo) para reducir el volumen en días laborables.
+    # weekday(): 0=lunes … 4=viernes, 5=sábado, 6=domingo
+    if nivel == 0 and ahora_madrid().weekday() < 5:
+        logger.info(
+            "Pick BAJO entre semana — descartado para reducir volumen "
+            "(partido: %s)",
+            datos.get("partido"),
+        )
+        return
 
     # Canal principal por tipo de pick
     canales_destino = []
