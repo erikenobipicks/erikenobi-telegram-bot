@@ -44,7 +44,7 @@ FREE_HORA_FIN    = 22
 # ==============================
 
 FILTRO_STRIKE_LIGA = {
-    "UGM": 65,
+    "UGM": 75,
     "LJ2": 65,
     "CF3": 75,
     "CH3": 75,
