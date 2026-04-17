@@ -15,6 +15,8 @@ from config import (
     ADMIN_IDS,
     DUPLICADO_VENTANA_MINUTOS,
     FINDE_CORNER_HORA_INICIO, FINDE_CORNER_HORA_FIN, FINDE_CORNER_STRIKE_MIN,
+    RACHA_MISS_LIMITE, RACHA_MISS_PAUSA_MIN,
+    RAFAGA_PICKS_LIMITE, RAFAGA_VENTANA_MIN, RAFAGA_PAUSA_MIN,
 )
 from state import STATE, save_state
 from extractor import (
@@ -31,7 +33,7 @@ from formateador import construir_mensaje_base, construir_mensaje_editado
 from clasificador_alertas import clasificar_alerta
 from free import intentar_envio_free
 from utils import hoy_str, ahora_madrid
-from db import db_guardar_publicacion, db_pick_por_message_id
+from db import db_guardar_publicacion, db_pick_por_message_id, db_racha_miss_actual
 from estadisticas import (
     registrar_pick_estadistica,
     actualizar_resultado_estadistica,
@@ -147,6 +149,86 @@ def _registrar_alerta_reciente(datos: dict, tipo_pick: str) -> None:
     clave_laxa = _clave_duplicado(datos, tipo_pick)
     if clave_laxa.replace("|", "").strip():
         recientes[clave_laxa] = ahora_ts
+
+
+# ══════════════════════════════════════════════════════════════════════
+# PAUSAS AUTOMÁTICAS — racha de rojos y ráfaga de picks
+# ══════════════════════════════════════════════════════════════════════
+
+def _obtener_pausa_activa(tipo_pick: str) -> dict | None:
+    """
+    Devuelve info de la pausa activa si existe, None si no hay pausa.
+    Comprueba tanto racha_miss como ráfaga.
+    """
+    ahora_ts = datetime.now(timezone.utc).timestamp()
+    pausas   = STATE.setdefault("pausas", {"racha_miss": {}, "rafaga": {}})
+    for motivo in ("racha_miss", "rafaga"):
+        fin = pausas.get(motivo, {}).get(tipo_pick)
+        if isinstance(fin, float) and fin > ahora_ts:
+            minutos_restantes = max(1, round((fin - ahora_ts) / 60))
+            return {"motivo": motivo, "hasta": fin, "minutos_restantes": minutos_restantes}
+    return None
+
+
+def _activar_pausa(tipo_pick: str, motivo: str, minutos: int) -> None:
+    """Activa una pausa para tipo_pick durante `minutos` minutos."""
+    ahora_ts = datetime.now(timezone.utc).timestamp()
+    pausas   = STATE.setdefault("pausas", {"racha_miss": {}, "rafaga": {}})
+    pausas.setdefault(motivo, {})[tipo_pick] = ahora_ts + minutos * 60
+    save_state()
+    logger.warning(
+        "PAUSA activada | motivo: %s | tipo: %s | duración: %d min",
+        motivo, tipo_pick, minutos,
+    )
+
+
+def _registrar_pick_reciente(tipo_pick: str) -> None:
+    """Registra el timestamp del pick publicado para detección de ráfaga."""
+    ahora_ts  = datetime.now(timezone.utc).timestamp()
+    recientes = STATE.setdefault("picks_recientes_ts", {})
+    lista     = recientes.setdefault(tipo_pick, [])
+    lista.append(ahora_ts)
+    # Conservar solo los últimos 30 timestamps para no crecer indefinidamente
+    recientes[tipo_pick] = lista[-30:]
+
+
+def _verificar_rafaga(tipo_pick: str) -> None:
+    """
+    Tras publicar un pick, comprueba si se ha alcanzado el límite de ráfaga.
+    Si RAFAGA_PICKS_LIMITE picks del mismo tipo se publicaron en los últimos
+    RAFAGA_VENTANA_MIN minutos, activa una pausa de RAFAGA_PAUSA_MIN minutos.
+    """
+    ahora_ts  = datetime.now(timezone.utc).timestamp()
+    ventana   = RAFAGA_VENTANA_MIN * 60
+    recientes = STATE.get("picks_recientes_ts", {}).get(tipo_pick, [])
+    en_ventana = sum(1 for ts in recientes if ahora_ts - ts <= ventana)
+
+    if en_ventana >= RAFAGA_PICKS_LIMITE:
+        _activar_pausa(tipo_pick, "rafaga", RAFAGA_PAUSA_MIN)
+        logger.warning(
+            "RÁFAGA detectada | tipo: %s | %d picks en %d min → pausa %d min",
+            tipo_pick, en_ventana, RAFAGA_VENTANA_MIN, RAFAGA_PAUSA_MIN,
+        )
+
+
+def _verificar_racha_miss(tipo_pick: str) -> None:
+    """
+    Tras registrar un MISS, comprueba si hay racha de rojos.
+    Si hay RACHA_MISS_LIMITE MISS consecutivos, activa pausa de RACHA_MISS_PAUSA_MIN min.
+    Los VOIDs no interrumpen ni suman a la racha.
+    """
+    try:
+        racha = db_racha_miss_actual(tipo_pick)
+    except Exception as e:
+        logger.error("Error consultando racha MISS: %s", e)
+        return
+
+    if racha >= RACHA_MISS_LIMITE:
+        _activar_pausa(tipo_pick, "racha_miss", RACHA_MISS_PAUSA_MIN)
+        logger.warning(
+            "RACHA MISS | tipo: %s | %d MISS consecutivos → pausa %d min",
+            tipo_pick, racha, RACHA_MISS_PAUSA_MIN,
+        )
 
 
 # ── Límite de tamaño del STATE ────────────────────────────────────────────────
@@ -364,6 +446,16 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
         save_state()
         return
 
+    # ── Comprobación de pausas activas (racha MISS o ráfaga) ─────────
+    # Las pausas solo aplican a picks LIVE; los prepartidos no se ven afectados.
+    pausa = _obtener_pausa_activa(tipo_pick)
+    if pausa:
+        logger.info(
+            "Pick bloqueado por pausa '%s' | tipo: %s | %d min restantes | partido: %s",
+            pausa["motivo"], tipo_pick, pausa["minutos_restantes"], datos.get("partido"),
+        )
+        return
+
     # ── Filtro strike corners — sábado 17-22h ────────────────────────
     if tipo_pick == "corner" and not es_prepartido:
         from utils import ahora_madrid
@@ -472,6 +564,9 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
         # Solo registrar en estadísticas si el pick llegó a al menos un canal,
         # igual que en el flujo prepartido. Evita contar picks cuyo envío falló.
         registrar_pick_estadistica(msg_id, datos, tipo_pick, enviado_a_free=enviado_a_free)
+        # Registrar timestamp para detección de ráfaga y verificar si se activa pausa
+        _registrar_pick_reciente(tipo_pick)
+        _verificar_rafaga(tipo_pick)
 
     db_guardar_publicacion(
         str(msg_id),
@@ -559,9 +654,15 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
         logger.warning(f"No se pudo actualizar el resultado en DB para msg_id {msg_id}")
     save_state()
 
+    resultado_actual = datos.get("resultado", "").upper()
+
     # Comprobar racha solo cuando el resultado es HIT
-    if datos.get("resultado") == "HIT":
+    if resultado_actual == "HIT":
         await verificar_racha_y_notificar(context, tipo_pick)
+
+    # Comprobar racha de MISS y activar pausa si es necesario
+    if resultado_actual == "MISS":
+        _verificar_racha_miss(tipo_pick)
 
     await publicar_resumen_diario_si_toca(context)
     await publicar_resumen_semanal_si_toca(context)

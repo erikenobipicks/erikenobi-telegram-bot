@@ -32,6 +32,8 @@ def save_state() -> None:
         ligero = {
             "mensajes_publicados": STATE.get("mensajes_publicados", {}),
             "alertas_recientes":   STATE.get("alertas_recientes", {}),
+            "pausas":              STATE.get("pausas", {}),
+            "picks_recientes_ts":  STATE.get("picks_recientes_ts", {}),
         }
         dir_estado = os.path.dirname(os.path.abspath(STATE_FILE)) or "."
         fd, tmp_path = tempfile.mkstemp(dir=dir_estado, suffix=".tmp", prefix="state_")
@@ -74,6 +76,11 @@ def load_state() -> None:
         # Solo usar alertas del JSON si la DB no devolvió nada
         if not STATE["alertas_recientes"]:
             STATE["alertas_recientes"] = loaded.get("alertas_recientes", {})
+        # Pausas activas — se restauran si el reinicio fue rápido (ej. deploy)
+        if loaded.get("pausas"):
+            STATE["pausas"] = loaded["pausas"]
+        if loaded.get("picks_recientes_ts"):
+            STATE["picks_recientes_ts"] = loaded["picks_recientes_ts"]
         # "estadisticas" solo se usa en la migración inicial (main.py).
         # Tras la primera ejecución siempre estará vacío, pero lo cargamos
         # por si el bot se actualiza antes de que main.py haya migrado.

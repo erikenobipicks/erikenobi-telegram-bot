@@ -51,6 +51,29 @@ FILTRO_STRIKE_LIGA = {
 }
 
 # ==============================
+# RACHA DE ROJOS — PAUSA AUTOMÁTICA
+# ==============================
+#
+# Si se acumulan RACHA_MISS_LIMITE MISS consecutivos (ignorando VOIDs)
+# del mismo tipo de pick, el bot deja de publicar ese tipo durante
+# RACHA_MISS_PAUSA_MIN minutos para no operar en mal momento.
+
+RACHA_MISS_LIMITE    = 3    # MISS consecutivos para activar pausa
+RACHA_MISS_PAUSA_MIN = 45   # minutos de pausa tras racha de rojos
+
+# ==============================
+# RÁFAGA DE PICKS — COOLDOWN
+# ==============================
+#
+# Si se publican RAFAGA_PICKS_LIMITE picks del mismo tipo en menos de
+# RAFAGA_VENTANA_MIN minutos, se activa una pausa de RAFAGA_PAUSA_MIN
+# minutos para ese tipo. Los picks PRE no cuentan en la ráfaga.
+
+RAFAGA_PICKS_LIMITE  = 3    # picks publicados en la ventana que activan pausa
+RAFAGA_VENTANA_MIN   = 15   # ventana de detección en minutos
+RAFAGA_PAUSA_MIN     = 30   # minutos de pausa tras ráfaga
+
+# ==============================
 # ANTI-DUPLICADO POR PARTIDO
 # ==============================
 #
@@ -144,6 +167,13 @@ STATE_FILE = "bot_state.json"
 
 DEFAULT_STATE = {
     "mensajes_publicados": {},
+    # Pausas automáticas activas: tipo_pick → timestamp UTC fin de pausa
+    "pausas": {
+        "racha_miss": {},   # activada tras N MISS consecutivos
+        "rafaga":     {},   # activada tras ráfaga de picks en ventana corta
+    },
+    # Timestamps de los últimos picks publicados (para detección de ráfaga)
+    "picks_recientes_ts": {},   # tipo_pick → [ts, ts, …]
     "free_state": {
         "fecha": None,
         "goles_enviados": 0,
