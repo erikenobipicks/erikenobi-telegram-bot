@@ -393,13 +393,14 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
         datos.get("partido"),
     )
 
-    # ── Filtro de bajo perfil entre semana ────────────────────────────
-    # Los picks BAJO (nivel 0) solo se publican en fin de semana
-    # (sábado y domingo) para reducir el volumen en días laborables.
+    # ── Filtro de bajo perfil en fin de semana ────────────────────────
+    # En sábado y domingo hay más volumen de picks de calidad, así que
+    # los picks BAJO (nivel 0) se descartan para no saturar los canales.
+    # Entre semana sí se publican porque hay menos actividad.
     # weekday(): 0=lunes … 4=viernes, 5=sábado, 6=domingo
-    if nivel == 0 and ahora_madrid().weekday() < 5:
+    if nivel == 0 and ahora_madrid().weekday() >= 5:
         logger.info(
-            "Pick BAJO entre semana — descartado para reducir volumen "
+            "Pick BAJO en fin de semana — descartado para reducir volumen "
             "(partido: %s)",
             datos.get("partido"),
         )
