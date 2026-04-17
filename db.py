@@ -405,7 +405,10 @@ def db_picks_por_periodo(periodo: str) -> list[dict]:
                     cur.execute("""
                         SELECT * FROM picks
                         WHERE date_trunc('month', fecha) =
-                              date_trunc('month', CURRENT_DATE - INTERVAL '1 month')
+                              date_trunc('month',
+                                  (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Madrid')::date
+                                  - INTERVAL '1 month'
+                              )
                         ORDER BY fecha_hora;
                     """)
 

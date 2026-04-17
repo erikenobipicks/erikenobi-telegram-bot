@@ -151,7 +151,7 @@ def _registrar_alerta_reciente(datos: dict, tipo_pick: str) -> None:
 
 # ── Límite de tamaño del STATE ────────────────────────────────────────────────
 
-_MAX_MENSAJES_PUBLICADOS = 500
+_MAX_MENSAJES_PUBLICADOS = 2000
 
 
 def limpiar_mensajes_publicados() -> None:
@@ -726,9 +726,11 @@ async def cmd_resultado_corner(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         corners_finales = int(context.args[1])
+        if not (0 <= corners_finales <= 150):
+            raise ValueError("fuera de rango")
     except ValueError:
         await update.message.reply_text(
-            "El total final de corners debe ser un numero entero."
+            "El total final de corners debe ser un número entero entre 0 y 150."
         )
         return
 

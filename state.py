@@ -74,7 +74,10 @@ def load_state() -> None:
         # Solo usar alertas del JSON si la DB no devolvió nada
         if not STATE["alertas_recientes"]:
             STATE["alertas_recientes"] = loaded.get("alertas_recientes", {})
-        STATE["estadisticas"] = loaded.get("estadisticas", DEFAULT_STATE["estadisticas"])
+        # "estadisticas" solo se usa en la migración inicial (main.py).
+        # Tras la primera ejecución siempre estará vacío, pero lo cargamos
+        # por si el bot se actualiza antes de que main.py haya migrado.
+        STATE["estadisticas"] = loaded.get("estadisticas", [])
 
         logger.info("Estado local cargado desde disco.")
     except FileNotFoundError:
