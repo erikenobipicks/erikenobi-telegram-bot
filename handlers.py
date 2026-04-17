@@ -459,9 +459,10 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
     }
     if destinos_publicados:
         _registrar_alerta_reciente(datos, tipo_pick)
+        # Solo registrar en estadísticas si el pick llegó a al menos un canal,
+        # igual que en el flujo prepartido. Evita contar picks cuyo envío falló.
+        registrar_pick_estadistica(msg_id, datos, tipo_pick, enviado_a_free=enviado_a_free)
 
-    # Registrar estadística con el flag de free
-    registrar_pick_estadistica(msg_id, datos, tipo_pick, enviado_a_free=enviado_a_free)
     db_guardar_publicacion(
         str(msg_id),
         mensaje_base,
