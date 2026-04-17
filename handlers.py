@@ -392,6 +392,16 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
         datos.get("partido"),
     )
 
+    # ── Filtro stake 0 — no apostar ───────────────────────────────────
+    # Si el clasificador asigna stake=0 significa que las condiciones no
+    # son favorables para apostar. Se descarta sin publicar nada.
+    if clasificacion["stake"] == 0:
+        logger.info(
+            "Pick con stake 0 (no apostar) — descartado | partido: %s",
+            datos.get("partido"),
+        )
+        return
+
     # ── Filtro de bajo perfil en fin de semana ────────────────────────
     # En sábado y domingo hay más volumen de picks de calidad, así que
     # los picks BAJO (nivel 0) se descartan para no saturar los canales.
