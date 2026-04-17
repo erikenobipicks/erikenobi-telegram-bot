@@ -812,10 +812,18 @@ def construir_mensaje_base(
         msg = re.sub(r"\n📊 (?:Cuotas.*|1X2:.*)", "", msg)
         msg = re.sub(r"\n💰 Cuota.*", "", msg)
 
-    # Anteponer bloque de clasificación si está disponible
+    # Insertar bloque de clasificación después de la primera línea
+    # para que el título (pick + partido) siga siendo lo primero visible
+    # en la notificación del móvil.
     if clasificacion is not None:
-        cabecera = _bloque_clasificacion(clasificacion)
-        msg = cabecera + "\n" + msg.strip()
+        cabecera  = _bloque_clasificacion(clasificacion)
+        lineas    = msg.strip().split("\n")
+        primera   = lineas[0]
+        resto     = "\n".join(lineas[1:]).strip() if len(lineas) > 1 else ""
+        if resto:
+            msg = primera + "\n\n" + cabecera + "\n" + resto
+        else:
+            msg = primera + "\n\n" + cabecera
 
     return msg.strip()
 
