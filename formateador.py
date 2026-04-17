@@ -376,7 +376,10 @@ def _titulo_visible(datos: dict, tipo_pick: str) -> str:
         mercado = f"{'Gol' if tipo_pick == 'gol' else 'Córner'} {periodo}".strip()
 
     entrada = _entrada_titulo(datos, tipo_pick)
-    pick_visible = _limpiar_prefijo_visual(entrada) if tipo_pick == "corner" and entrada else mercado
+    # Corners y NEXTGOAL usan la línea de entrada directamente como título
+    # para que sea visible de un vistazo en la notificación del móvil.
+    _usar_entrada = entrada and (tipo_pick == "corner" or modo == "NEXTGOAL")
+    pick_visible = _limpiar_prefijo_visual(entrada) if _usar_entrada else mercado
     base = f"{emoji} <b>{_esc(pick_visible)}</b>"
     if partido:
         base = f"{base} | {partido}"
