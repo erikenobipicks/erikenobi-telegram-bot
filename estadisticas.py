@@ -387,7 +387,7 @@ _PERIODO_DB = {
 
 _PERIODO_DB_AUTO = {
     "dia":    "dia",
-    "semana": "semana",
+    "semana": "semana_anterior",   # el job semanal corre el lunes: muestra la semana que acaba de cerrar
     "mes":    "mes_anterior",
     "anio":   "anio",
 }
@@ -406,19 +406,29 @@ async def publicar_resumenes_si_toca(context, periodo: str) -> None:
     # Evita publicar resúmenes parciales si el job se dispara fuera de hora.
     ahora_local = ahora_madrid()
     if periodo == "dia" and ahora_local.hour < 23:
-        logger.debug(f"Resumen diario: hora {ahora_local.hour}h < 23h, se pospone.")
+        logger.info("Resumen diario: hora %dh < 23h, se pospone.", ahora_local.hour)
         return
     if periodo == "semana" and (ahora_local.weekday() != 0 or ahora_local.hour < 23):
-        logger.debug(f"Resumen semanal: no es lunes ≥ 23h, se pospone.")
+        logger.info(
+            "Resumen semanal: no es lunes ≥ 23h (weekday=%d, hora=%dh), se pospone.",
+            ahora_local.weekday(), ahora_local.hour,
+        )
         return
     if periodo == "mes" and (ahora_local.day != 1 or ahora_local.hour < 9):
-        logger.debug(f"Resumen mensual: no es día 1 ≥ 9h, se pospone.")
+        logger.info(
+            "Resumen mensual: no es día 1 ≥ 9h (día=%d, hora=%dh), se pospone.",
+            ahora_local.day, ahora_local.hour,
+        )
         return
     # ────────────────────────────────────────────────────────────────
 
     clave_valor = _clave_periodo(periodo)
     periodo_db  = _PERIODO_DB_AUTO.get(periodo, periodo)
     lista_base  = db_picks_por_periodo(periodo_db)
+    logger.info(
+        "Resumen %s: compuerta abierta — %d picks encontrados en DB (periodo_db=%s).",
+        periodo, len(lista_base), periodo_db,
+    )
 
     for cfg in RESUMENES_CONFIG:
         resumen_id    = cfg["id"]

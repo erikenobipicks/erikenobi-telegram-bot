@@ -167,24 +167,30 @@ def main() -> None:
         from state import save_state as _sv
         _sv()
 
-    # Diario: 23:45 todos los días
-    app.job_queue.run_daily(
+    # Diario: comprobación cada 5 minutos.
+    # La compuerta horaria en publicar_resumenes_si_toca() bloquea la
+    # publicación antes de las 23:00. Usar repeating en lugar de run_daily
+    # hace que el resumen se publique aunque el bot se reinicie a las 23:45.
+    app.job_queue.run_repeating(
         callback = job_resumen_diario,
-        time     = datetime.time(23, 45, tzinfo=_TZ_MADRID),
+        interval = 5 * 60,   # cada 5 minutos
+        first    = 60,       # primera ejecución 60s tras el arranque
         name     = "resumen_diario",
     )
-    # Semanal: 23:45 los lunes (publica el resumen de la semana anterior ya cerrada)
-    app.job_queue.run_daily(
+    # Semanal: comprobación cada 10 minutos.
+    # La compuerta exige lunes ≥ 23h; db_ya_publicado evita duplicados.
+    app.job_queue.run_repeating(
         callback = job_resumen_semanal,
-        time     = datetime.time(23, 45, tzinfo=_TZ_MADRID),
-        days     = (0,),   # 0 = lunes
+        interval = 10 * 60,
+        first    = 90,
         name     = "resumen_semanal",
     )
-    # Mensual: 09:00 el día 1 de cada mes
-    # (_debe_publicar_ahora comprueba que sea día 1)
-    app.job_queue.run_daily(
+    # Mensual: comprobación cada 15 minutos.
+    # La compuerta exige día 1 ≥ 9h; db_ya_publicado evita duplicados.
+    app.job_queue.run_repeating(
         callback = job_resumen_mensual,
-        time     = datetime.time(9, 0, tzinfo=_TZ_MADRID),
+        interval = 15 * 60,
+        first    = 120,
         name     = "resumen_mensual",
     )
     app.job_queue.run_daily(
