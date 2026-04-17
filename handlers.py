@@ -60,29 +60,28 @@ def _normalizar_alerta(valor: str | None) -> str:
 
 def _clave_duplicado(datos: dict, tipo_pick: str) -> str:
     """
-    Clave para detectar el mismo pick reenviado en la ventana de tiempo:
-    tipo + periodo + modo + línea + partido.
-
-    Incluye modo y línea para que picks distintos del mismo partido
-    (ej: corner +1 vs corner over 2) no se bloqueen entre sí.
-    La clave exacta (_clave_alerta_reciente) cubre el bloqueo de 24h
-    para picks idénticos.
+    Clave laxa para la ventana de DUPLICADO_VENTANA_MINUTOS minutos.
+    Bloquea cualquier pick del mismo tipo y periodo para el mismo partido,
+    independientemente del modelo o mercado concreto. Así se evita que
+    varios modelos disparen alertas del mismo partido en un intervalo corto.
     """
     partido = _normalizar_alerta(datos.get("partido"))
     periodo = _normalizar_alerta(detectar_periodo_por_codigo(datos))
-    modo    = _normalizar_alerta(detectar_modo_por_codigo(datos))
-    linea   = _normalizar_alerta(detectar_linea_por_codigo(datos))
-    return "|".join([tipo_pick.upper(), periodo, modo, linea, partido])
+    return "|".join([tipo_pick.upper(), periodo, partido])
 
 
 def _clave_alerta_reciente(datos: dict, tipo_pick: str) -> str:
-    liga = _normalizar_alerta(datos.get("liga"))
+    """
+    Clave exacta para el bloqueo de 24h.
+    Incluye el mercado concreto (modo+línea) pero NO la liga, porque el texto
+    de la liga puede variar ligeramente entre modelos para el mismo partido.
+    """
     partido = _normalizar_alerta(datos.get("partido"))
-    fase = _normalizar_alerta(detectar_fase_por_codigo(datos))
+    fase    = _normalizar_alerta(detectar_fase_por_codigo(datos))
     periodo = _normalizar_alerta(detectar_periodo_por_codigo(datos))
-    modo = _normalizar_alerta(detectar_modo_por_codigo(datos))
-    linea = _normalizar_alerta(detectar_linea_por_codigo(datos))
-    return "|".join([tipo_pick.upper(), fase, periodo, modo, linea, liga, partido])
+    modo    = _normalizar_alerta(detectar_modo_por_codigo(datos))
+    linea   = _normalizar_alerta(detectar_linea_por_codigo(datos))
+    return "|".join([tipo_pick.upper(), fase, periodo, modo, linea, partido])
 
 
 def _purga_alertas_recientes() -> None:
