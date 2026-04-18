@@ -290,7 +290,15 @@ def db_registrar_pick(
                         )
                         ON CONFLICT (message_id_origen) DO NOTHING;
                     """, params)
-            logger.debug(f"Pick guardado en DB: {message_id_origen}")
+                    _rows = cur.rowcount
+            if _rows == 0:
+                logger.warning(
+                    "PICK IGNORADO — ON CONFLICT en picks para message_id_origen=%s. "
+                    "La fila ya existe en DB. Ninguna fila nueva creada.",
+                    message_id_origen,
+                )
+            else:
+                logger.info("Pick registrado en DB: %s", message_id_origen)
             return
         except Exception as e:
             if intento == 0:
