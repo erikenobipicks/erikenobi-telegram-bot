@@ -58,7 +58,7 @@ _ALTO_CUOTA_MAX  = 2.20  # cuota local máxima
 
 # FAVORABLE
 _FAV_MOMENTUM_MIN = -10  # diferencia momentum (local − visitante) mínima
-_FAV_MIN_MAX      = 72   # minuto máximo
+_FAV_MIN_MAX      = 85   # minuto máximo
 
 
 # ══════════════════════════════════════════════════════════════════════════════
