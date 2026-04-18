@@ -59,6 +59,7 @@ _ALTO_CUOTA_MAX  = 2.20  # cuota local máxima
 # FAVORABLE
 _FAV_MOMENTUM_MIN = -10  # diferencia momentum (local − visitante) mínima
 _FAV_MIN_MAX      = 85   # minuto máximo
+_FAV_CORNER_SL_MIN = 75  # strike_liga mínimo para que un corner ignore el límite de minuto
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -145,12 +146,22 @@ def _clasificar_base(datos: dict, tipo_pick: str) -> dict:
 
     # ── FAVORABLE — nivel 1 ───────────────────────────────────────────
     excluido = next((t for t in _TERMINOS_EXCLUIDOS if t in texto_ef), None)
+    # Los corners con strike_liga alto son válidos a cualquier minuto:
+    # el historial de la liga predice el resultado mejor que el minuto.
+    corner_alta_confianza = (
+        tipo_pick == "corner"
+        and sl is not None
+        and sl >= _FAV_CORNER_SL_MIN
+    )
     if (
         excluido is None
         and momentum_diff >= _FAV_MOMENTUM_MIN
-        and minuto <= _FAV_MIN_MAX
+        and (minuto <= _FAV_MIN_MAX or corner_alta_confianza)
     ):
-        razones = [f"Minuto: {minuto}' (≤ {_FAV_MIN_MAX}')"]
+        if corner_alta_confianza and minuto > _FAV_MIN_MAX:
+            razones = [f"Corner alta confianza: strike_liga {sl}% (≥ {_FAV_CORNER_SL_MIN}%) — minuto ignorado"]
+        else:
+            razones = [f"Minuto: {minuto}' (≤ {_FAV_MIN_MAX}')"]
         if ml is not None:
             razones.append(
                 f"Momentum: {ml}-{mv} (diferencia {momentum_diff:+})"
