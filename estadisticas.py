@@ -45,6 +45,7 @@ def registrar_pick_estadistica(
     datos: dict,
     tipo_pick: str,
     enviado_a_free: bool = False,
+    nivel: str | None = None,
 ) -> None:
     # Extraer cuota para picks prepartido
     # PRE_1X  → primera cuota de 1X2 (cuota local)
@@ -112,6 +113,7 @@ def registrar_pick_estadistica(
         fecha             = hoy_str(),
         fecha_hora        = ahora_str(),
         odds              = odds,
+        nivel             = nivel,
     )
 
 

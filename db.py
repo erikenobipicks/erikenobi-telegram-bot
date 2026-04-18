@@ -155,6 +155,9 @@ def init_db() -> None:
             cur.execute("""
                 ALTER TABLE picks ADD COLUMN IF NOT EXISTS destinos_json TEXT;
             """)
+            cur.execute("""
+                ALTER TABLE picks ADD COLUMN IF NOT EXISTS nivel TEXT;
+            """)
 
             # Índices útiles para filtrar por fecha y tipo
             cur.execute("""
@@ -182,6 +185,11 @@ def init_db() -> None:
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_picks_resultado
                 ON picks (resultado);
+            """)
+            # Índice para análisis por nivel (ÉLITE/ALTO/FAVORABLE/BAJO)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_picks_nivel
+                ON picks (nivel);
             """)
 
             # Integridad: CHECK en tipo_pick para evitar valores inválidos.
@@ -252,6 +260,7 @@ def db_registrar_pick(
     fecha: str,
     fecha_hora: str,
     odds: float | None = None,
+    nivel: str | None = None,
 ) -> None:
     params = (
         message_id_origen, codigo, tipo_pick, periodo_codigo, modo_codigo,
@@ -259,7 +268,7 @@ def db_registrar_pick(
         strike_alerta, strike_liga, strike_alerta_pct, strike_liga_pct,
         enviado_a_free, minuto_alerta, goles_entrada_total,
         corners_entrada_total, red_cards_entrada_total,
-        momentum_local, momentum_visitante, odds, fecha, fecha_hora,
+        momentum_local, momentum_visitante, odds, nivel, fecha, fecha_hora,
     )
     # Un reintento automático ante fallos transitorios de red/DB
     for intento in range(2):
@@ -273,11 +282,11 @@ def db_registrar_pick(
                             strike_alerta, strike_liga, strike_alerta_pct, strike_liga_pct,
                             resultado, enviado_a_free, minuto_alerta, goles_entrada_total,
                             corners_entrada_total, red_cards_entrada_total,
-                            momentum_local, momentum_visitante, odds, fecha, fecha_hora
+                            momentum_local, momentum_visitante, odds, nivel, fecha, fecha_hora
                         )
                         VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         ON CONFLICT (message_id_origen) DO NOTHING;
                     """, params)

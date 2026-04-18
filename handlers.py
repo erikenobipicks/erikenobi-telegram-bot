@@ -563,7 +563,7 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
         _registrar_alerta_reciente(datos, tipo_pick)
         # Solo registrar en estadísticas si el pick llegó a al menos un canal,
         # igual que en el flujo prepartido. Evita contar picks cuyo envío falló.
-        registrar_pick_estadistica(msg_id, datos, tipo_pick, enviado_a_free=enviado_a_free)
+        registrar_pick_estadistica(msg_id, datos, tipo_pick, enviado_a_free=enviado_a_free, nivel=clasificacion["nombre"])
         # Registrar timestamp para detección de ráfaga y verificar si se activa pausa
         _registrar_pick_reciente(tipo_pick)
         _verificar_rafaga(tipo_pick)
