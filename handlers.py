@@ -32,7 +32,7 @@ from bankroll import get_bankroll, set_bankroll, leer_bankroll_excel
 from formateador import construir_mensaje_base, construir_mensaje_editado
 from clasificador_alertas import clasificar_alerta
 from free import intentar_envio_free
-from utils import hoy_str, ahora_madrid
+from utils import hoy_str, ahora_madrid, parse_percent
 from db import db_guardar_publicacion, db_pick_por_message_id, db_racha_miss_actual
 from estadisticas import (
     registrar_pick_estadistica,
@@ -458,10 +458,8 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
 
     # ── Filtro strike corners — sábado 17-22h ────────────────────────
     if tipo_pick == "corner" and not es_prepartido:
-        from utils import ahora_madrid
         ahora = ahora_madrid()
         if ahora.weekday() == 5 and FINDE_CORNER_HORA_INICIO <= ahora.hour < FINDE_CORNER_HORA_FIN:
-            from utils import parse_percent
             sa = parse_percent(datos.get("strike_alerta"))
             if sa is not None and sa < FINDE_CORNER_STRIKE_MIN:
                 logger.info(
