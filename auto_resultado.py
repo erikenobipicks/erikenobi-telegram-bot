@@ -245,6 +245,42 @@ def _parse_linea(linea_codigo: str | None) -> int:
     return 1
 
 
+def _es_linea_ball(linea_codigo: str | None) -> bool:
+    """
+    Devuelve True si la línea es un entero exacto del tipo "LÍNEA N" o "LINEA N".
+
+    En apuestas de línea entera, si el número de eventos coincide EXACTAMENTE
+    con la línea, la apuesta es NULA (stake devuelto → VOID).
+    Las líneas semienteras ("OVER N.5", "+N.5") y los códigos alfanuméricos
+    (CF2, GF3…) no pueden dar empate exacto → solo HIT o MISS.
+
+    Ejemplos:
+      "LÍNEA 1"  → True   (0→MISS, 1→VOID, 2+→HIT)
+      "LINEA 2"  → True   (0-1→MISS, 2→VOID, 3+→HIT)
+      "OVER 1.5" → False  (0-1→MISS, 2+→HIT, sin VOID)
+      "CF2"      → False
+    """
+    if not linea_codigo:
+        return False
+    return bool(re.search(r"L[IÍ]NEA\s+\d+", linea_codigo.upper()))
+
+
+def _resolver_resultado(eventos: int, linea: int, es_ball: bool) -> str:
+    """
+    Aplica la lógica HIT / VOID / MISS según el tipo de línea.
+
+    - Línea ball (entera): eventos < linea → MISS, == linea → VOID, > linea → HIT
+    - Línea over (semientera o código): eventos >= linea → HIT, < linea → MISS
+    """
+    if es_ball:
+        if eventos > linea:
+            return "HIT"
+        if eventos == linea:
+            return "VOID"
+        return "MISS"
+    return "HIT" if eventos >= linea else "MISS"
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Resolución por tipo
 # ──────────────────────────────────────────────────────────────────────────────
@@ -252,6 +288,10 @@ def _parse_linea(linea_codigo: str | None) -> int:
 def _resolver_gol(pick: dict, fixture: dict) -> str | None:
     """
     Devuelve "HIT", "MISS", "VOID" o None (partido no terminado aún).
+
+    VOID puede ocurrir por dos razones:
+      1. El partido fue cancelado/aplazado/abandonado.
+      2. La línea es entera (LÍNEA N) y el número de goles coincide exactamente.
     """
     status = fixture["fixture"]["status"]["short"]
 
@@ -262,7 +302,9 @@ def _resolver_gol(pick: dict, fixture: dict) -> str | None:
 
     fixture_id    = fixture["fixture"]["id"]
     minuto        = pick.get("minuto_alerta") or 0
-    linea         = _parse_linea(pick.get("linea_codigo"))
+    linea_codigo  = pick.get("linea_codigo")
+    linea         = _parse_linea(linea_codigo)
+    es_ball       = _es_linea_ball(linea_codigo)
     eventos       = _eventos_gol(fixture_id)
 
     goles_despues = sum(
@@ -270,10 +312,10 @@ def _resolver_gol(pick: dict, fixture: dict) -> str | None:
         if (e.get("time", {}).get("elapsed") or 0) > minuto
     )
 
-    resultado = "HIT" if goles_despues >= linea else "MISS"
+    resultado = _resolver_resultado(goles_despues, linea, es_ball)
     logger.debug(
-        "GOL | %s | minuto=%s linea=%s goles_despues=%s → %s",
-        pick.get("partido"), minuto, linea, goles_despues, resultado,
+        "GOL | %s | minuto=%s linea=%s ball=%s goles_despues=%s → %s",
+        pick.get("partido"), minuto, linea, es_ball, goles_despues, resultado,
     )
     return resultado
 
@@ -282,11 +324,12 @@ def _resolver_corner(pick: dict, fixture: dict) -> str | None:
     """
     Devuelve "HIT", "MISS", "VOID" o None (partido no terminado aún).
 
+    VOID puede ocurrir por dos razones:
+      1. El partido fue cancelado/aplazado/abandonado.
+      2. La línea es entera (LÍNEA N) y los corners coinciden exactamente.
+
     Nota: la API free no da eventos de corner por minuto; usamos la
     diferencia entre el total final y los corners en el momento del pick.
-    Esto puede dar HIT en picks tardíos donde todos los corners ya
-    habían ocurrido, pero es la mejor aproximación disponible sin
-    datos granulares.
     """
     status = fixture["fixture"]["status"]["short"]
 
@@ -297,16 +340,18 @@ def _resolver_corner(pick: dict, fixture: dict) -> str | None:
 
     fixture_id      = fixture["fixture"]["id"]
     corners_entrada = pick.get("corners_entrada_total") or 0
-    linea           = _parse_linea(pick.get("linea_codigo"))
+    linea_codigo    = pick.get("linea_codigo")
+    linea           = _parse_linea(linea_codigo)
+    es_ball         = _es_linea_ball(linea_codigo)
     stats           = _estadisticas(fixture_id)
 
     total_corners   = stats.get("Corner Kicks", 0)
     corners_despues = max(0, total_corners - corners_entrada)
 
-    resultado = "HIT" if corners_despues >= linea else "MISS"
+    resultado = _resolver_resultado(corners_despues, linea, es_ball)
     logger.debug(
-        "CORNER | %s | corners_entrada=%s total=%s linea=%s corners_despues=%s → %s",
-        pick.get("partido"), corners_entrada, total_corners, linea, corners_despues, resultado,
+        "CORNER | %s | corners_entrada=%s total=%s linea=%s ball=%s corners_despues=%s → %s",
+        pick.get("partido"), corners_entrada, total_corners, linea, es_ball, corners_despues, resultado,
     )
     return resultado
 
