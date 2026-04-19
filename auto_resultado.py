@@ -4,15 +4,21 @@ auto_resultado.py
 Job automático que resuelve picks pendientes consultando API-Football v3.
 
 Lógica de resolución:
-  GOL    → cuenta goles después del minuto del pick.
-           HIT si ocurrieron >= N goles (N = línea del pick).
-           MISS si el partido terminó y no se llegó.
+  GOL (live)     → cuenta goles después del minuto del pick.
+                   HIT si ocurrieron >= N goles (N = línea del pick).
+                   MISS si el partido terminó y no se llegó.
 
-  CORNER → compara corners totales finales con corners_entrada_total.
-           HIT si la diferencia >= N (N = línea del pick).
-           MISS si el partido terminó y no se llegó.
-           Nota: la API free no devuelve eventos de corner por minuto,
-           solo totales al final, por eso se usa la diferencia total.
+  CORNER (live)  → compara corners totales finales con corners_entrada_total.
+                   HIT si la diferencia >= N (N = línea del pick).
+                   MISS si el partido terminó y no se llegó.
+                   Nota: la API free no devuelve eventos de corner por minuto,
+                   solo totales al final, por eso se usa la diferencia total.
+
+  PREPARTIDO     → picks con código PRE_*. Se busca el fixture en una ventana
+                   de AUTO_PRE_VENTANA días a partir de la fecha de publicación
+                   (el partido puede ser hasta varios días después del pick).
+                   GOL prepartido: cuenta goles totales del partido (minuto=0).
+                   CORNER prepartido: cuenta corners totales del partido.
 
   VOID   → si el partido fue cancelado, aplazado o abandonado.
 
@@ -20,11 +26,13 @@ Variables de entorno:
   API_FOOTBALL_KEY  — clave de API-Football (v3.football.api-sports.io)
 
 Configuración:
-  AUTO_MIN_HORAS   — mínimo de horas tras publicación para intentar resolver (default 2)
-  AUTO_MAX_DIAS    — máximo de días hacia atrás que se revisan (default 3)
-  AUTO_MIN_SCORE   — similitud mínima (0-1) para aceptar un partido como coincidencia (default 0.55)
+  AUTO_MIN_HORAS    — mínimo de horas tras publicación para intentar resolver (default 2)
+  AUTO_MAX_DIAS     — máximo de días hacia atrás que se revisan (default 10)
+  AUTO_MIN_SCORE    — similitud mínima (0-1) para aceptar un partido como coincidencia (default 0.55)
+  AUTO_PRE_VENTANA  — días hacia adelante para buscar el partido de un pick prepartido (default 8)
 """
 
+import datetime
 import logging
 import os
 import re
@@ -43,9 +51,10 @@ logger = logging.getLogger(__name__)
 API_KEY  = os.getenv("API_FOOTBALL_KEY", "")
 API_BASE = "https://v3.football.api-sports.io"
 
-AUTO_MIN_HORAS = int(os.getenv("AUTO_MIN_HORAS", "2"))
-AUTO_MAX_DIAS  = int(os.getenv("AUTO_MAX_DIAS",  "3"))
-AUTO_MIN_SCORE = float(os.getenv("AUTO_MIN_SCORE", "0.55"))
+AUTO_MIN_HORAS   = int(os.getenv("AUTO_MIN_HORAS",   "2"))
+AUTO_MAX_DIAS    = int(os.getenv("AUTO_MAX_DIAS",    "10"))   # ↑ de 3 a 10 para cubrir prepartidos
+AUTO_MIN_SCORE   = float(os.getenv("AUTO_MIN_SCORE", "0.55"))
+AUTO_PRE_VENTANA = int(os.getenv("AUTO_PRE_VENTANA", "8"))    # días a buscar hacia adelante para PRE
 
 # Partidos terminados de forma oficial
 _STATUS_TERMINADO = {"FT", "AET", "PEN", "AWD"}
@@ -303,6 +312,53 @@ def _resolver_corner(pick: dict, fixture: dict) -> str | None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Helpers prepartido
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _es_prepartido(pick: dict) -> bool:
+    """
+    Detecta si el pick es prepartido (código empieza por PRE).
+    Los picks prepartido no tienen minuto_alerta ni stats de entrada.
+    """
+    codigo = (pick.get("codigo") or "").upper()
+    return codigo.startswith("PRE")
+
+
+def _buscar_fixture_ventana(partido: str, fecha_inicio_str: str) -> dict | None:
+    """
+    Para picks prepartido: busca el fixture en una ventana de AUTO_PRE_VENTANA días.
+    Empieza en fecha_inicio y avanza día a día hasta encontrar coincidencia.
+
+    Usa el caché de _fixtures_por_fecha para no duplicar llamadas a la API
+    cuando el mismo día ya fue consultado en esta sesión.
+    """
+    try:
+        fecha = datetime.date.fromisoformat(fecha_inicio_str)
+    except ValueError:
+        logger.warning("Fecha inválida para búsqueda ventana: %r", fecha_inicio_str)
+        return None
+
+    for delta in range(AUTO_PRE_VENTANA + 1):
+        fecha_str = str(fecha + datetime.timedelta(days=delta))
+        fixtures  = _fixtures_por_fecha(fecha_str)
+        if not fixtures:
+            continue
+        fixture = _buscar_fixture(partido, fixtures)
+        if fixture:
+            logger.info(
+                "Prepartido encontrado en fecha %s (delta +%d días desde publicación)",
+                fecha_str, delta,
+            )
+            return fixture
+
+    logger.warning(
+        "Sin fixture para prepartido '%s' en ventana de %d días desde %s",
+        partido, AUTO_PRE_VENTANA, fecha_inicio_str,
+    )
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Job principal
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -335,14 +391,21 @@ async def job_auto_resultado(context) -> None:
 
     for pick in picks:
         try:
-            fecha_str = str(pick["fecha"])
-            fixtures  = _fixtures_por_fecha(fecha_str)
+            fecha_str   = str(pick["fecha"])
+            es_pre      = _es_prepartido(pick)
 
-            if not fixtures:
-                sin_partido += 1
-                continue
+            if es_pre:
+                # Prepartido: el partido ocurre DESPUÉS de la publicación.
+                # Buscamos en una ventana de días hacia adelante.
+                fixture = _buscar_fixture_ventana(pick.get("partido", ""), fecha_str)
+            else:
+                # Live: el partido es el mismo día que la alerta.
+                fixtures = _fixtures_por_fecha(fecha_str)
+                if not fixtures:
+                    sin_partido += 1
+                    continue
+                fixture = _buscar_fixture(pick.get("partido", ""), fixtures)
 
-            fixture = _buscar_fixture(pick.get("partido", ""), fixtures)
             if not fixture:
                 sin_partido += 1
                 continue
