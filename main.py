@@ -39,6 +39,7 @@ from estadisticas import (
     notificar_picks_pendientes_si_toca,
     notificar_picks_pendientes_retrasados,
 )
+from auto_resultado import job_auto_resultado
 
 _TZ_MADRID = ZoneInfo("Europe/Madrid")
 
@@ -218,6 +219,14 @@ def main() -> None:
         interval = 4 * 60 * 60,
         first    = 120,
         name     = "purgar_alertas",
+    )
+    # Auto-resolución de picks pendientes vía API-Football (cada hora)
+    # Solo activo si la variable API_FOOTBALL_KEY está configurada en Railway.
+    app.job_queue.run_repeating(
+        callback = job_auto_resultado,
+        interval = 60 * 60,
+        first    = 180,
+        name     = "auto_resultado",
     )
 
     logger.info("Bot iniciado — escuchando mensajes nuevos y editados.")
