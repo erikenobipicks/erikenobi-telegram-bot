@@ -234,6 +234,40 @@ _MESES_ES_LARGO = {
     9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre",
 }
 
+# Cuota de referencia fija para calcular profit/ROI en picks live
+_CUOTA_LIVE = 1.70
+
+
+def _profit_live(subset: list) -> tuple[float, float, int]:
+    """
+    Calcula profit y ROI a cuota fija _CUOTA_LIVE para una lista de picks live.
+    Los picks prepartido (código PRE_*) se excluyen — tienen cuota real propia.
+
+    Reglas:
+      HIT  → +(_CUOTA_LIVE - 1) unidades  (ej: +0.70u a 1.70)
+      MISS → -1.00u
+      VOID → 0u (stake devuelto, pero cuenta como pick jugado en el denominador)
+      Pendiente → no se incluye
+
+    Devuelve (profit_units, roi_pct, picks_contabilizados).
+    """
+    profit = 0.0
+    staked = 0
+    for x in subset:
+        if (x.get("codigo") or "").upper().startswith("PRE"):
+            continue
+        r = x.get("resultado")
+        if r == "HIT":
+            profit += _CUOTA_LIVE - 1.0
+            staked += 1
+        elif r == "MISS":
+            profit -= 1.0
+            staked += 1
+        elif r == "VOID":
+            staked += 1   # stake devuelto → profit 0, pero pick jugado
+    roi = round(profit / staked * 100, 1) if staked > 0 else 0.0
+    return round(profit, 2), roi, staked
+
 
 def _fecha_legible() -> str:
     ahora = ahora_madrid()
@@ -256,14 +290,24 @@ def _mensaje_motivacional(strike: float, resueltos: int) -> str:
     return "📉 Día difícil. La tendencia sigue siendo positiva."
 
 
+def _fmt_profit(profit: float, roi: float) -> str:
+    """Formatea profit y ROI con signo y emoji de tendencia."""
+    p_str   = f"+{profit:.2f}u" if profit >= 0 else f"{profit:.2f}u"
+    r_str   = f"+{roi:.1f}%" if roi >= 0 else f"{roi:.1f}%"
+    emoji   = "📈" if profit >= 0 else "📉"
+    return f"{emoji} {p_str}  ·  ROI {r_str}"
+
+
 def construir_resumen(lista: list, titulo: str) -> str:
     total      = len(lista)
     hits       = sum(1 for x in lista if x.get("resultado") == "HIT")
     miss       = sum(1 for x in lista if x.get("resultado") == "MISS")
     voids      = sum(1 for x in lista if x.get("resultado") == "VOID")
     pendientes = total - hits - miss - voids
-    resueltos  = hits + miss
-    strike     = round((hits / resueltos) * 100, 1) if resueltos > 0 else 0.0
+
+    # Strike: HIT / (HIT + MISS + VOID) — nulos cuentan como pick jugado
+    base_strike = hits + miss + voids
+    strike      = round((hits / base_strike) * 100, 1) if base_strike > 0 else 0.0
 
     goles   = [x for x in lista if x.get("tipo_pick") == "gol"]
     corners = [x for x in lista if x.get("tipo_pick") == "corner"]
@@ -277,9 +321,14 @@ def construir_resumen(lista: list, titulo: str) -> str:
     gh, gm, gv = stats(goles)
     ch, cm, cv = stats(corners)
 
-    strike_txt = f"<b>{strike}%</b>" if resueltos > 0 else "<b>—</b>"
-    pendientes_txt = f"  ·  ⏳ <i>{pendientes} pendientes</i>" if pendientes > 0 else ""
-    motivo = _mensaje_motivacional(strike, resueltos)
+    # Profit a cuota fija 1.70 (solo picks live, excluye PRE_*)
+    profit_tot, roi_tot, staked_tot = _profit_live(lista)
+    gp, gr, gs = _profit_live(goles)
+    cp, cr, cs = _profit_live(corners)
+
+    strike_txt     = f"<b>{strike}%</b>" if base_strike > 0 else "<b>—</b>"
+    pendientes_txt = f"  ·  ⏳ <i>{pendientes} pend.</i>" if pendientes > 0 else ""
+    motivo         = _mensaje_motivacional(strike, base_strike)
 
     lineas = [
         f"<b>{titulo}</b>",
@@ -293,12 +342,18 @@ def construir_resumen(lista: list, titulo: str) -> str:
 
     if goles and corners:
         lineas.append("")
-        lineas.append(f"⚽ Goles:   ✅ {gh}  ❌ {gm}  ⚪ {gv}  <i>({len(goles)} picks)</i>")
-        lineas.append(f"🚩 Córners: ✅ {ch}  ❌ {cm}  ⚪ {cv}  <i>({len(corners)} picks)</i>")
+        g_profit_txt = f"  <i>{_fmt_profit(gp, gr)}</i>" if gs > 0 else ""
+        c_profit_txt = f"  <i>{_fmt_profit(cp, cr)}</i>" if cs > 0 else ""
+        lineas.append(f"⚽ Goles:   ✅ {gh}  ❌ {gm}  ⚪ {gv}  <i>({len(goles)} picks)</i>{g_profit_txt}")
+        lineas.append(f"🚩 Córners: ✅ {ch}  ❌ {cm}  ⚪ {cv}  <i>({len(corners)} picks)</i>{c_profit_txt}")
     elif goles:
         lineas.append(f"\n⚽ Goles:   ✅ {gh}  ❌ {gm}  ⚪ {gv}")
     elif corners:
         lineas.append(f"\n🚩 Córners: ✅ {ch}  ❌ {cm}  ⚪ {cv}")
+
+    if staked_tot > 0:
+        lineas.append("")
+        lineas.append(f"💰 Profit @{_CUOTA_LIVE}: <b>{_fmt_profit(profit_tot, roi_tot)}</b>  <i>({staked_tot} picks)</i>")
 
     lineas.append("")
     lineas.append(motivo)
@@ -338,11 +393,14 @@ def _construir_resumen_anual(lista: list) -> str:
         picks_mes  = por_mes[mes_key]
         hits_m     = sum(1 for x in picks_mes if x.get("resultado") == "HIT")
         misses_m   = sum(1 for x in picks_mes if x.get("resultado") == "MISS")
-        resueltos  = hits_m + misses_m
-        strike_m   = round((hits_m / resueltos) * 100, 1) if resueltos > 0 else 0
+        voids_m    = sum(1 for x in picks_mes if x.get("resultado") == "VOID")
+        base_m     = hits_m + misses_m + voids_m
+        strike_m   = round((hits_m / base_m) * 100, 1) if base_m > 0 else 0
         nombre_mes = meses_es.get(mes_key[5:], mes_key[5:])
+        profit_m, roi_m, staked_m = _profit_live(picks_mes)
+        profit_txt = f" | {_fmt_profit(profit_m, roi_m)}" if staked_m > 0 else ""
         lineas_mes.append(
-            f"  {nombre_mes}: {len(picks_mes)} picks | {strike_m}% strike"
+            f"  {nombre_mes}: {len(picks_mes)} picks | {strike_m}% strike{profit_txt}"
         )
 
     return texto_base + "\n".join(lineas_mes)
