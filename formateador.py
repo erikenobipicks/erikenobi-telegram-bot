@@ -728,6 +728,79 @@ def _construir_pre(datos: dict, tipo_pick: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# MENSAJE BASE — RECORDATORIO DE KICKOFF (REM_*)
+# ══════════════════════════════════════════════════════════════════════
+
+def _construir_rem(
+    datos: dict,
+    tipo_pick: str,
+    stake: float,
+    historial: str,
+) -> str:
+    """
+    Mensaje para un recordatorio de kickoff (código REM_*).
+    Muestra el mercado, cuota, stake basado en historial y el propio historial.
+    """
+    emoji   = "⚽" if tipo_pick == "gol" else "🚩"
+    partido = _esc(datos.get("partido") or "")
+    liga    = _esc(datos.get("liga") or "")
+    kickoff = _esc(datos.get("kickoff") or "")
+
+    # Mercado legible (reutilizamos la lógica de subtítulo PRE)
+    linea = (detectar_linea_por_codigo(datos) or "").upper()
+    if "OVER2.5" in linea:
+        mercado = "Over 2.5 FT"
+    elif "OVER1.5" in linea:
+        mercado = "Over 1.5 FT"
+    elif "OVER0.5" in linea:
+        mercado = "Over 0.5 FT"
+    elif "1X" in linea:
+        mercado = "Ganador Local"
+    else:
+        mercado = linea or "Prepartido"
+
+    # Cuota real del alert (si está disponible)
+    cuota_txt = None
+    odds_25_raw = datos.get("odds_over_2_5")
+    if odds_25_raw:
+        partes = odds_25_raw.split()
+        if partes:
+            cuota_txt = partes[0]
+    if not cuota_txt:
+        odds_15_raw = datos.get("odds_over_1_5")
+        if odds_15_raw:
+            partes = odds_15_raw.split()
+            if partes:
+                cuota_txt = partes[0]
+
+    # Stake formateado
+    if stake == 0.0:
+        stake_txt = "⏸ 0u — En revisión"
+    elif stake == int(stake):
+        stake_txt = f"{int(stake)}u"
+    else:
+        stake_txt = f"{stake:.1f}u"
+
+    lineas = [f"⏰ <b>RECORDATORIO</b> | {emoji} {_esc(mercado)} | {partido}"]
+    lineas.append("")
+
+    if liga:
+        lineas.append(f"🏆 {liga}")
+    if kickoff:
+        lineas.append(f"⌛ Kickoff: <b>{kickoff}</b>")
+
+    lineas.append("")
+    if cuota_txt:
+        lineas.append(f"💰 Cuota: <b>{cuota_txt}</b>")
+    lineas.append(f"📦 Stake: <b>{stake_txt}</b>")
+
+    lineas.append("")
+    lineas.append(f"📊 Historial: <i>{_esc(historial)}</i>")
+
+    return "\n".join(lineas)
+
+
+# ══════════════════════════════════════════════════════════════════════
 # API PÚBLICA
 # ══════════════════════════════════════════════════════════════════════
 
@@ -795,15 +868,28 @@ def construir_mensaje_base(
     tipo_pick: str,
     para_free: bool = False,
     clasificacion: dict | None = None,
+    # Parámetros opcionales para mensajes REM
+    rem_stake: float | None = None,
+    rem_historial: str | None = None,
 ) -> str:
     """
     Construye el mensaje inicial (sin resultado).
     para_free=True oculta las cuotas detalladas.
     clasificacion=dict activa el bloque de nivel/stake al inicio.
+    rem_stake / rem_historial se usan cuando fase == "REM".
     """
     fase = detectar_fase_por_codigo(datos) or ""
 
-    if fase == "PRE":
+    if fase == "REM":
+        # Recordatorio de kickoff — usa stake e historial pre-calculados
+        msg = _construir_rem(
+            datos,
+            tipo_pick,
+            stake     = rem_stake    if rem_stake    is not None else 1.0,
+            historial = rem_historial if rem_historial is not None else "Sin historial aún",
+        )
+        return msg.strip()  # sin clasificación ni filtro free en recordatorios
+    elif fase == "PRE":
         msg = _construir_pre(datos, tipo_pick)
     elif tipo_pick == "corner":
         msg = _construir_live_corner(datos)

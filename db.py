@@ -501,6 +501,34 @@ def db_pick_por_message_id(message_id_origen: str) -> dict | None:
         return None
 
 
+def db_buscar_pre_para_rem(
+    codigo_pre: str,
+    tipo_pick: str,
+    dias: int = 14,
+) -> list[dict]:
+    """
+    Devuelve picks PRE sin resultado candidatos a vincularse con un recordatorio REM.
+    Filtra por código PRE exacto y tipo_pick dentro de los últimos N días.
+    El llamador aplica el fuzzy match de partido sobre la lista devuelta.
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT * FROM picks
+                    WHERE codigo ILIKE %s
+                      AND tipo_pick = %s
+                      AND resultado IS NULL
+                      AND fecha >= CURRENT_DATE - (%s * INTERVAL '1 day')::INTERVAL
+                    ORDER BY fecha_hora DESC
+                    LIMIT 20;
+                """, (codigo_pre, tipo_pick, dias))
+                return cur.fetchall()
+    except Exception as e:
+        logger.error("Error en db_buscar_pre_para_rem (codigo=%s): %s", codigo_pre, e)
+        return []
+
+
 def db_picks_pendientes_revision(max_dias: int = 7, min_horas: int = 6) -> list[dict]:
     """
     Devuelve picks sin resultado pendientes de revision manual.

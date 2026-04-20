@@ -49,6 +49,9 @@ from estadisticas import (
     publicar_resumen_mensual_si_toca,
     notificar_picks_pendientes_si_toca,
     verificar_racha_y_notificar,
+    calcular_stake_pre,
+    historial_pre_str,
+    propagar_resultado_rem_a_pre,
 )
 
 logger = logging.getLogger(__name__)
@@ -400,7 +403,8 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     fase = detectar_fase_por_codigo(datos)
-    es_prepartido = (fase == "PRE")
+    es_prepartido   = (fase == "PRE")
+    es_recordatorio = (fase == "REM")
 
     if _es_alerta_duplicada(datos, tipo_pick):
         logger.info(
@@ -409,6 +413,62 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
             datos.get("codigo"),
             datos.get("partido"),
         )
+        return
+
+    # ── Picks RECORDATORIO (REM_*) → canal PRE, vincula con PRE original ─
+    if es_recordatorio:
+        if not CANAL_PRE_ID:
+            logger.warning("Pick recordatorio recibido pero CANAL_PRE_ID no configurado.")
+            return
+
+        codigo_rem = (datos.get("codigo") or "").upper()   # REM_O25FT
+        codigo_pre = "PRE_" + codigo_rem[4:]               # PRE_O25FT
+
+        # Stake e historial basados en el rendimiento acumulado del PRE
+        stake    = calcular_stake_pre(codigo_pre, tipo_pick)
+        historial = historial_pre_str(codigo_pre, tipo_pick)
+
+        mensaje_rem = construir_mensaje_base(
+            datos, tipo_pick,
+            rem_stake=stake,
+            rem_historial=historial,
+        )
+
+        logger.info(
+            "RECORDATORIO | tipo: %s | codigo_pre: %s | stake: %su | origen msg_id: %s",
+            tipo_pick, codigo_pre, stake, msg_id,
+        )
+
+        destinos_publicados: dict[str, int] = {}
+        try:
+            enviado = await enviar_mensaje(context, CANAL_PRE_ID, mensaje_rem)
+            destinos_publicados[str(CANAL_PRE_ID)] = enviado.message_id
+            logger.info(f"Recordatorio enviado a {CANAL_PRE_ID} (msg {enviado.message_id})")
+        except Exception as e:
+            logger.error(f"Error enviando recordatorio a {CANAL_PRE_ID}: {e}")
+
+        # Guardamos en STATE para poder editar el mensaje cuando llegue el resultado.
+        # NO registramos en DB como estadística (evita duplicar con el PRE original).
+        STATE["mensajes_publicados"][str(msg_id)] = {
+            "tipo_pick":         tipo_pick,
+            "mensaje_base":      mensaje_rem,
+            "mensaje_base_free": mensaje_rem,
+            "destinos":          destinos_publicados,
+            "es_recordatorio":   True,
+            "codigo_pre":        codigo_pre,
+            "partido":           datos.get("partido") or "",
+        }
+
+        if destinos_publicados:
+            _registrar_alerta_reciente(datos, tipo_pick)
+            db_guardar_publicacion(
+                str(msg_id),
+                mensaje_rem,
+                mensaje_rem,
+                json.dumps(destinos_publicados, ensure_ascii=False),
+            )
+
+        save_state()
         return
 
     # ── Picks PREPARTIDO → canal propio, sin FREE ni canales live ────
@@ -649,8 +709,26 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
 
     actualizado = actualizar_resultado_estadistica(msg_id, datos.get("resultado"))
     if not actualizado:
-        logger.warning(f"No se pudo actualizar el resultado en DB para msg_id {msg_id}")
+        # Puede ser normal si es un REM (no registrado en DB como estadística)
+        logger.info(
+            "Pick %s no actualizado en DB — puede ser un recordatorio REM (esperado).",
+            msg_id,
+        )
     save_state()
+
+    # ── Propagación REM → PRE ─────────────────────────────────────────
+    # Si el mensaje editado es un recordatorio (REM_*), propaga el resultado
+    # al pick PRE original usando fuzzy match de nombre de partido.
+    codigo_edit = (datos.get("codigo") or "").upper()
+    if codigo_edit.startswith("REM_") and datos.get("resultado") and datos.get("partido"):
+        codigo_pre  = "PRE_" + codigo_edit[4:]
+        propagar_resultado_rem_a_pre(
+            rem_message_id = msg_id,
+            codigo_pre     = codigo_pre,
+            partido_rem    = datos.get("partido", ""),
+            tipo_pick      = tipo_pick,
+            resultado      = datos.get("resultado"),
+        )
 
     resultado_actual = datos.get("resultado", "").upper()
 

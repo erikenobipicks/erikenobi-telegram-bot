@@ -30,6 +30,7 @@ from db import (
     db_marcar_publicado,
     db_stats_prepartido_por_mes,
     db_stats_prepartido_global,
+    db_buscar_pre_para_rem,
 )
 from config import RESUMENES_CONFIG, RACHA_MINIMA, CANAL_RACHA_ID, ADMIN_IDS
 
@@ -39,6 +40,129 @@ logger = logging.getLogger(__name__)
 # ==============================
 # REGISTRO DE PICKS
 # ==============================
+
+def calcular_stake_pre(codigo_pre: str, tipo_pick: str) -> float:
+    """
+    Calcula el stake recomendado para un pick PRE en base al historial acumulado en DB.
+
+    Modelo basado en ROI a cuota 1.70 de referencia:
+      < 10 picks resueltos  → 1.0u  (sin muestra suficiente)
+      ROI < -10%            → 0.0u  (en pérdidas, pausar)
+      ROI  0%-10%           → 1.0u
+      ROI 10%-20%, WR≥60%  → 1.5u
+      ROI > 20%,  WR≥65%   → 2.0u
+    """
+    picks = db_picks_para_analisis(codigo=codigo_pre, tipo_pick=tipo_pick, dias=180)
+    resueltos = [p for p in picks if p.get("resultado") in ("HIT", "MISS", "VOID")]
+
+    n = len(resueltos)
+    if n < 10:
+        return 1.0  # muestra insuficiente → stake base
+
+    hits   = sum(1 for p in resueltos if p.get("resultado") == "HIT")
+    misses = sum(1 for p in resueltos if p.get("resultado") == "MISS")
+    voids  = sum(1 for p in resueltos if p.get("resultado") == "VOID")
+    base   = hits + misses + voids
+    wr     = hits / base if base > 0 else 0.0
+    profit = hits * 0.70 - misses * 1.0
+    roi    = profit / base if base > 0 else 0.0
+
+    if roi < -0.10:
+        return 0.0
+    if roi >= 0.20 and wr >= 0.65:
+        return 2.0
+    if roi >= 0.10 and wr >= 0.60:
+        return 1.5
+    return 1.0
+
+
+def historial_pre_str(codigo_pre: str, tipo_pick: str) -> str:
+    """
+    Devuelve una cadena corta con el historial del código PRE para mostrar
+    en el mensaje del recordatorio.
+    Ejemplo: '8✅ 3❌ 1⚪ de 12 (66.7% | ROI +3.5%)'
+    """
+    picks = db_picks_para_analisis(codigo=codigo_pre, tipo_pick=tipo_pick, dias=180)
+    resueltos = [p for p in picks if p.get("resultado") in ("HIT", "MISS", "VOID")]
+
+    n = len(resueltos)
+    if n == 0:
+        return "Sin historial aún"
+
+    hits   = sum(1 for p in resueltos if p.get("resultado") == "HIT")
+    misses = sum(1 for p in resueltos if p.get("resultado") == "MISS")
+    voids  = sum(1 for p in resueltos if p.get("resultado") == "VOID")
+    base   = hits + misses + voids
+    wr     = round(hits / base * 100, 1) if base > 0 else 0.0
+    profit = hits * 0.70 - misses * 1.0
+    roi    = round(profit / base * 100, 1) if base > 0 else 0.0
+    roi_str = f"+{roi:.1f}%" if roi >= 0 else f"{roi:.1f}%"
+
+    void_txt = f" {voids}⚪" if voids > 0 else ""
+    return f"{hits}✅ {misses}❌{void_txt} de {n}  ({wr}% | ROI {roi_str})"
+
+
+def propagar_resultado_rem_a_pre(
+    rem_message_id,
+    codigo_pre: str,
+    partido_rem: str,
+    tipo_pick: str,
+    resultado: str,
+) -> None:
+    """
+    Cuando un recordatorio REM recibe resultado de inplayguru, lo propaga
+    al pick PRE original usando fuzzy matching de nombre de partido.
+
+    Solo actualiza el PRE si el matching supera el umbral de 0.80 de similitud,
+    para evitar actualizaciones incorrectas.
+    """
+    import re
+    import difflib
+
+    candidatos = db_buscar_pre_para_rem(codigo_pre, tipo_pick)
+    if not candidatos:
+        logger.info(
+            "REM→PRE: sin picks %s pendientes para propagar resultado (msg_rem=%s).",
+            codigo_pre, rem_message_id,
+        )
+        return
+
+    def _norm(s: str) -> str:
+        return re.sub(r"[^a-z0-9 ]", "", s.lower())
+
+    mejor_score = 0.0
+    mejor_pick  = None
+    for pick in candidatos:
+        partido_pre = pick.get("partido") or ""
+        score = difflib.SequenceMatcher(
+            None, _norm(partido_rem), _norm(partido_pre)
+        ).ratio()
+        if score > mejor_score:
+            mejor_score = score
+            mejor_pick  = pick
+
+    if mejor_score < 0.80 or not mejor_pick:
+        logger.warning(
+            "REM→PRE: no se encontró PRE con suficiente similitud para '%s' "
+            "(mejor score=%.2f < 0.80). No se propaga resultado.",
+            partido_rem, mejor_score,
+        )
+        return
+
+    pre_id = mejor_pick["message_id_origen"]
+    ok = db_actualizar_resultado_confirmado(pre_id, resultado)
+    if ok:
+        logger.info(
+            "REM→PRE ✅ | msg_rem=%s → %s | PRE %s '%s' (score=%.2f)",
+            rem_message_id, resultado, pre_id,
+            mejor_pick.get("partido", ""), mejor_score,
+        )
+    else:
+        logger.warning(
+            "REM→PRE: no se pudo actualizar PRE %s con resultado %s",
+            pre_id, resultado,
+        )
+
 
 def registrar_pick_estadistica(
     message_id_origen,

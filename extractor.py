@@ -217,11 +217,18 @@ def _es_formato_pre_corto(datos: dict) -> bool:
     return len(partes) >= 4 and partes[0].upper().startswith("PRE_") and partes[1].upper() == "PRE"
 
 
+def _es_formato_rem(datos: dict) -> bool:
+    """Detecta alertas REM_* (recordatorio de kickoff vinculado a un PRE)."""
+    partes = obtener_bloques_codigo(datos)
+    return bool(partes) and partes[0].upper().startswith("REM_")
+
+
 def detectar_tipo_pick_por_codigo(datos: dict) -> str | None:
     meta = datos.get("meta_alerta") or ""
     codigo = (datos.get("codigo") or "").upper()
 
-    if codigo.startswith("PRE_"):
+    # PRE_ y REM_ comparten la misma lógica de tipo (GOAL → gol, CORNER → corner)
+    if codigo.startswith("PRE_") or codigo.startswith("REM_"):
         if "CORNER" in meta.upper() or "CORNER" in codigo:
             return "corner"
         return "gol"
@@ -262,6 +269,10 @@ def detectar_periodo_por_codigo(datos: dict) -> str | None:
 
 def detectar_fase_por_codigo(datos: dict) -> str | None:
     partes = obtener_bloques_codigo(datos)
+    # REM debe comprobarse ANTES que PRE porque su partes[3] == "PRE"
+    # y sin esta guarda se clasificaría incorrectamente como prepartido.
+    if _es_formato_rem(datos):
+        return "REM"
     if _es_formato_pre_corto(datos):
         return "PRE"
     return partes[3].upper() if len(partes) >= 4 else None
