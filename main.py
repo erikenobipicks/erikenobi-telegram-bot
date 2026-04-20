@@ -36,6 +36,7 @@ from estadisticas import (
     publicar_resumen_diario_si_toca,
     publicar_resumen_semanal_si_toca,
     publicar_resumen_mensual_si_toca,
+    publicar_resumen_pre_mensual_si_toca,
     notificar_picks_pendientes_si_toca,
     notificar_picks_pendientes_retrasados,
 )
@@ -151,6 +152,9 @@ def main() -> None:
     async def job_resumen_mensual(ctx):
         await publicar_resumen_mensual_si_toca(ctx)
 
+    async def job_resumen_pre_mensual(ctx):
+        await publicar_resumen_pre_mensual_si_toca(ctx)
+
     async def job_revision_pendientes(ctx):
         await notificar_picks_pendientes_si_toca(ctx)
 
@@ -186,13 +190,20 @@ def main() -> None:
         first    = 90,
         name     = "resumen_semanal",
     )
-    # Mensual: comprobación cada 15 minutos.
+    # Mensual live: comprobación cada 15 minutos.
     # La compuerta exige día 1 ≥ 9h; db_ya_publicado evita duplicados.
     app.job_queue.run_repeating(
         callback = job_resumen_mensual,
         interval = 15 * 60,
         first    = 120,
         name     = "resumen_mensual",
+    )
+    # Mensual PRE: mismo ritmo que el live, publica en CANAL_PRE_ID.
+    app.job_queue.run_repeating(
+        callback = job_resumen_pre_mensual,
+        interval = 15 * 60,
+        first    = 135,
+        name     = "resumen_pre_mensual",
     )
     app.job_queue.run_daily(
         callback = job_revision_pendientes,

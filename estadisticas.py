@@ -32,7 +32,7 @@ from db import (
     db_stats_prepartido_global,
     db_buscar_pre_para_rem,
 )
-from config import RESUMENES_CONFIG, RACHA_MINIMA, CANAL_RACHA_ID, ADMIN_IDS
+from config import RESUMENES_CONFIG, RACHA_MINIMA, CANAL_RACHA_ID, CANAL_PRE_ID, ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +347,18 @@ def filtrar_por_tipo(lista: list, tipo_pick) -> list:
     return [x for x in lista if x.get("tipo_pick") == tipo_pick]
 
 
+def _filtrar_solo_live(lista: list) -> list:
+    """
+    Excluye picks PRE_* de la lista para que los resúmenes del canal live
+    no mezclen estadísticas prepartido con picks en directo.
+    (Los picks REM_* no se registran en DB, así que no aparecen aquí.)
+    """
+    return [
+        x for x in lista
+        if not (x.get("codigo") or "").upper().startswith("PRE_")
+    ]
+
+
 # ==============================
 # CONSTRUCCIÓN DEL TEXTO DE RESUMEN
 # ==============================
@@ -608,9 +620,9 @@ async def publicar_resumenes_si_toca(context, periodo: str) -> None:
 
     clave_valor = _clave_periodo(periodo)
     periodo_db  = _PERIODO_DB_AUTO.get(periodo, periodo)
-    lista_base  = db_picks_por_periodo(periodo_db)
+    lista_base  = _filtrar_solo_live(db_picks_por_periodo(periodo_db))
     logger.info(
-        "Resumen %s: compuerta abierta — %d picks encontrados en DB (periodo_db=%s).",
+        "Resumen %s: compuerta abierta — %d picks live encontrados en DB (periodo_db=%s).",
         periodo, len(lista_base), periodo_db,
     )
 
@@ -1074,7 +1086,7 @@ async def enviar_analisis_filtros_comando(update, filtro: str | None = None) -> 
 
 async def enviar_resumenes_comando(update, periodo: str) -> None:
     periodo_db = _PERIODO_DB.get(periodo, periodo)
-    lista_base = db_picks_por_periodo(periodo_db)
+    lista_base = _filtrar_solo_live(db_picks_por_periodo(periodo_db))
 
     nombres = {"dia": "hoy", "semana": "esta semana", "mes": "el mes pasado"}
     nombre  = nombres.get(periodo, periodo)
@@ -1097,12 +1109,12 @@ async def enviar_resumenes_comando(update, periodo: str) -> None:
 async def enviar_resumen_anual_comando(update) -> None:
     """
     Resumen del año en curso con desglose mes a mes, enviado como respuesta
-    al comando /resumen_anual.
+    al comando /resumen_anual. Solo incluye picks live (excluye PRE_*).
     """
-    lista = db_picks_por_periodo("anio")
+    lista = _filtrar_solo_live(db_picks_por_periodo("anio"))
 
     if not lista:
-        await update.message.reply_text("No hay picks registrados para este año.")
+        await update.message.reply_text("No hay picks live registrados para este año.")
         return
 
     texto = _construir_resumen_anual(lista)
@@ -1127,11 +1139,10 @@ async def enviar_resumen_liga_comando(update, liga: str) -> None:
     await update.message.reply_text(texto, parse_mode="HTML")
 
 
-async def enviar_resumen_prepartido_comando(update) -> None:
+def _construir_texto_resumen_pre() -> str | None:
     """
-    Resumen de picks prepartido con desglose mes a mes por estrategia.
-    Incluye profit en unidades y ROI.
-    Uso: /resumen_pre
+    Construye el texto del resumen prepartido (global + mes a mes por estrategia).
+    Devuelve None si no hay datos registrados.
     """
     _NOMBRES = {
         "PRE_O25FT": "Over 2.5 FT",
@@ -1140,7 +1151,6 @@ async def enviar_resumen_prepartido_comando(update) -> None:
         "PRE_O15FT": "Over 1.5 FT",
         "PRE_O05FT": "Over 0.5 FT",
     }
-
     meses_es = {
         "01": "Ene", "02": "Feb", "03": "Mar", "04": "Abr",
         "05": "May", "06": "Jun", "07": "Jul", "08": "Ago",
@@ -1151,10 +1161,8 @@ async def enviar_resumen_prepartido_comando(update) -> None:
     mes_rows    = db_stats_prepartido_por_mes()
 
     if not global_rows:
-        await update.message.reply_text("No hay picks prepartido registrados aún.")
-        return
+        return None
 
-    from collections import defaultdict
     por_codigo: dict[str, list] = defaultdict(list)
     for row in mes_rows:
         por_codigo[row["codigo"]].append(row)
@@ -1224,7 +1232,57 @@ async def enviar_resumen_prepartido_comando(update) -> None:
 
         lineas.append("")
 
-    await update.message.reply_text("\n".join(lineas), parse_mode="HTML")
+    return "\n".join(lineas)
+
+
+async def enviar_resumen_prepartido_comando(update) -> None:
+    """
+    Resumen de picks prepartido con desglose mes a mes por estrategia.
+    Incluye profit en unidades y ROI.
+    Uso: /resumen_pre
+    """
+    texto = _construir_texto_resumen_pre()
+    if not texto:
+        await update.message.reply_text("No hay picks prepartido registrados aún.")
+        return
+    await update.message.reply_text(texto, parse_mode="HTML")
+
+
+async def publicar_resumen_pre_mensual_si_toca(context) -> None:
+    """
+    Publica el resumen prepartido mensual en CANAL_PRE_ID el día 1 de cada mes ≥ 9h.
+    Usa db_ya_publicado / db_marcar_publicado para evitar duplicados.
+    """
+    ahora_local = ahora_madrid()
+    if ahora_local.day != 1 or ahora_local.hour < 9:
+        return
+
+    clave_valor   = ahora_local.strftime("%Y-%m")
+    clave_control = "resumen_pre_mensual"
+
+    if db_ya_publicado(clave_control, clave_valor):
+        return
+
+    texto = _construir_texto_resumen_pre()
+    if not texto:
+        logger.info("Resumen PRE mensual: sin datos, se omite.")
+        db_marcar_publicado(clave_control, clave_valor)
+        return
+
+    if not CANAL_PRE_ID:
+        logger.warning("Resumen PRE mensual: CANAL_PRE_ID no configurado, se omite.")
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id    = CANAL_PRE_ID,
+            text       = texto,
+            parse_mode = "HTML",
+        )
+        db_marcar_publicado(clave_control, clave_valor)
+        logger.info("Resumen PRE mensual publicado en canal %s", CANAL_PRE_ID)
+    except Exception as e:
+        logger.error("Error publicando resumen PRE mensual: %s", e)
 
 
 async def enviar_resumen_codigo_comando(update, codigo: str) -> None:
