@@ -37,6 +37,7 @@ from estadisticas import (
     publicar_resumen_semanal_si_toca,
     publicar_resumen_mensual_si_toca,
     publicar_resumen_pre_mensual_si_toca,
+    publicar_resumenes_pre_si_toca,
     notificar_picks_pendientes_si_toca,
     notificar_picks_pendientes_retrasados,
 )
@@ -155,6 +156,15 @@ def main() -> None:
     async def job_resumen_pre_mensual(ctx):
         await publicar_resumen_pre_mensual_si_toca(ctx)
 
+    async def job_resumen_pre_dia(ctx):
+        await publicar_resumenes_pre_si_toca(ctx, "dia")
+
+    async def job_resumen_pre_semana(ctx):
+        await publicar_resumenes_pre_si_toca(ctx, "semana")
+
+    async def job_resumen_pre_mes(ctx):
+        await publicar_resumenes_pre_si_toca(ctx, "mes")
+
     async def job_revision_pendientes(ctx):
         await notificar_picks_pendientes_si_toca(ctx)
 
@@ -198,12 +208,32 @@ def main() -> None:
         first    = 120,
         name     = "resumen_mensual",
     )
-    # Mensual PRE: mismo ritmo que el live, publica en CANAL_PRE_ID.
+    # Mensual PRE global (legacy): mismo ritmo que el live, publica en CANAL_PRE_ID.
     app.job_queue.run_repeating(
         callback = job_resumen_pre_mensual,
         interval = 15 * 60,
         first    = 135,
         name     = "resumen_pre_mensual",
+    )
+    # Resúmenes PRE por canal (Carlos Mollar y General) — diario, semanal, mensual.
+    # Mismas compuertas horarias que los resúmenes live.
+    app.job_queue.run_repeating(
+        callback = job_resumen_pre_dia,
+        interval = 5 * 60,
+        first    = 150,
+        name     = "resumen_pre_dia",
+    )
+    app.job_queue.run_repeating(
+        callback = job_resumen_pre_semana,
+        interval = 10 * 60,
+        first    = 165,
+        name     = "resumen_pre_semana",
+    )
+    app.job_queue.run_repeating(
+        callback = job_resumen_pre_mes,
+        interval = 15 * 60,
+        first    = 180,
+        name     = "resumen_pre_mes",
     )
     app.job_queue.run_daily(
         callback = job_revision_pendientes,

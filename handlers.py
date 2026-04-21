@@ -10,7 +10,8 @@ from telegram.ext import ContextTypes
 
 from config import (
     CANAL_ORIGEN_ID,
-    CANAL_CORNERS_ID, CANAL_GOLES_ID, CANAL_GENERAL_ID, CANAL_FREE_ID, CANAL_PRE_ID,
+    CANAL_CORNERS_ID, CANAL_GOLES_ID, CANAL_GENERAL_ID, CANAL_FREE_ID,
+    CANAL_PRE_ID, CANAL_PRE_GENERAL_ID,
     ENVIAR_A_GENERAL,
     ADMIN_IDS,
     DUPLICADO_VENTANA_MINUTOS,
@@ -50,7 +51,6 @@ from estadisticas import (
     notificar_picks_pendientes_si_toca,
     verificar_racha_y_notificar,
     calcular_stake_pre,
-    historial_pre_str,
     propagar_resultado_rem_a_pre,
 )
 
@@ -81,6 +81,14 @@ def _extraer_odds_pre(datos: dict, codigo: str) -> float | None:
         except ValueError:
             pass
     return None
+
+
+def _es_carlos_mollar(datos: dict) -> bool:
+    """
+    Devuelve True si el pick pertenece al sistema Carlos Mollar.
+    Se detecta por la etiqueta 'sistema' extraída de partes[6] de la alerta.
+    """
+    return "CARLOS" in (datos.get("sistema") or "").upper()
 
 
 def _normalizar_alerta(valor: str | None) -> str:
@@ -441,39 +449,40 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
-    # ── Picks RECORDATORIO (REM_*) → canal PRE, vincula con PRE original ─
+    # ── Picks RECORDATORIO (REM_*) → canal PRE según sistema, vincula con PRE original ─
     if es_recordatorio:
-        if not CANAL_PRE_ID:
-            logger.warning("Pick recordatorio recibido pero CANAL_PRE_ID no configurado.")
-            return
-
         codigo_rem = (datos.get("codigo") or "").upper()   # REM_O25FT
         codigo_pre = "PRE_" + codigo_rem[4:]               # PRE_O25FT
+
+        # Routing: Carlos Mollar → CANAL_PRE_ID; resto → CANAL_PRE_GENERAL_ID
+        canal_rem = CANAL_PRE_ID if _es_carlos_mollar(datos) else CANAL_PRE_GENERAL_ID
+
+        if not canal_rem:
+            logger.warning("Pick recordatorio recibido pero el canal destino no está configurado.")
+            return
 
         # Stake dinámico: scorer_pre usa liga y cuota real del alert
         _liga_rem = datos.get("liga")
         _odds_rem = _extraer_odds_pre(datos, codigo_pre)
         stake     = calcular_stake_pre(codigo_pre, tipo_pick, liga=_liga_rem, odds=_odds_rem)
-        historial = historial_pre_str(codigo_pre, tipo_pick)
 
         mensaje_rem = construir_mensaje_base(
             datos, tipo_pick,
             rem_stake=stake,
-            rem_historial=historial,
         )
 
         logger.info(
-            "RECORDATORIO | tipo: %s | codigo_pre: %s | stake: %su | origen msg_id: %s",
-            tipo_pick, codigo_pre, stake, msg_id,
+            "RECORDATORIO | tipo: %s | codigo_pre: %s | stake: %su | canal: %s | origen msg_id: %s",
+            tipo_pick, codigo_pre, stake, canal_rem, msg_id,
         )
 
         destinos_publicados: dict[str, int] = {}
         try:
-            enviado = await enviar_mensaje(context, CANAL_PRE_ID, mensaje_rem)
-            destinos_publicados[str(CANAL_PRE_ID)] = enviado.message_id
-            logger.info(f"Recordatorio enviado a {CANAL_PRE_ID} (msg {enviado.message_id})")
+            enviado = await enviar_mensaje(context, canal_rem, mensaje_rem)
+            destinos_publicados[str(canal_rem)] = enviado.message_id
+            logger.info(f"Recordatorio enviado a {canal_rem} (msg {enviado.message_id})")
         except Exception as e:
-            logger.error(f"Error enviando recordatorio a {CANAL_PRE_ID}: {e}")
+            logger.error(f"Error enviando recordatorio a {canal_rem}: {e}")
 
         # Guardamos en STATE para poder editar el mensaje cuando llegue el resultado.
         # NO registramos en DB como estadística (evita duplicar con el PRE original).
@@ -499,10 +508,13 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
         save_state()
         return
 
-    # ── Picks PREPARTIDO → canal propio, sin FREE ni canales live ────
+    # ── Picks PREPARTIDO → canal PRE según sistema, sin FREE ni canales live ────
     if es_prepartido:
-        if not CANAL_PRE_ID:
-            logger.warning("Pick prepartido recibido pero CANAL_PRE_ID no configurado.")
+        # Routing: Carlos Mollar → CANAL_PRE_ID; resto → CANAL_PRE_GENERAL_ID
+        canal_pre = CANAL_PRE_ID if _es_carlos_mollar(datos) else CANAL_PRE_GENERAL_ID
+
+        if not canal_pre:
+            logger.warning("Pick prepartido recibido pero el canal destino no está configurado.")
             return
 
         # Stake dinámico con scorer_pre (liga + cuota real del alert)
@@ -514,17 +526,17 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
 
         mensaje_pre = construir_mensaje_base(datos, tipo_pick)
         logger.info(
-            "PREPARTIDO | tipo: %s | codigo: %s | stake: %.1fu | origen msg_id: %s",
-            tipo_pick, _codigo_pre, _stake_pre, msg_id,
+            "PREPARTIDO | tipo: %s | codigo: %s | stake: %.1fu | canal: %s | origen msg_id: %s",
+            tipo_pick, _codigo_pre, _stake_pre, canal_pre, msg_id,
         )
 
         destinos_publicados: dict[str, int] = {}
         try:
-            enviado = await enviar_mensaje(context, CANAL_PRE_ID, mensaje_pre)
-            destinos_publicados[str(CANAL_PRE_ID)] = enviado.message_id
-            logger.info(f"Prepartido enviado a {CANAL_PRE_ID} (msg {enviado.message_id})")
+            enviado = await enviar_mensaje(context, canal_pre, mensaje_pre)
+            destinos_publicados[str(canal_pre)] = enviado.message_id
+            logger.info(f"Prepartido enviado a {canal_pre} (msg {enviado.message_id})")
         except Exception as e:
-            logger.error(f"Error enviando prepartido a {CANAL_PRE_ID}: {e}")
+            logger.error(f"Error enviando prepartido a {canal_pre}: {e}")
 
         STATE["mensajes_publicados"][str(msg_id)] = {
             "tipo_pick":         tipo_pick,

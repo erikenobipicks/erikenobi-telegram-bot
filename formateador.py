@@ -735,11 +735,10 @@ def _construir_rem(
     datos: dict,
     tipo_pick: str,
     stake: float,
-    historial: str,
 ) -> str:
     """
     Mensaje para un recordatorio de kickoff (código REM_*).
-    Muestra el mercado, cuota, stake basado en historial y el propio historial.
+    Muestra el mercado, cuota y stake calculado por scorer_pre.
     """
     emoji   = "⚽" if tipo_pick == "gol" else "🚩"
     partido = _esc(datos.get("partido") or "")
@@ -801,9 +800,6 @@ def _construir_rem(
     if cuota_txt:
         lineas.append(f"💰 Cuota: <b>{cuota_txt}</b>")
     lineas.append(f"📦 Stake: <b>{stake_txt}</b>")
-
-    lineas.append("")
-    lineas.append(f"📊 Historial: <i>{_esc(historial)}</i>")
 
     if sistema_legible:
         lineas.append(f"📋 Sistema: <b>{_esc(sistema_legible)}</b>")
@@ -879,25 +875,23 @@ def construir_mensaje_base(
     tipo_pick: str,
     para_free: bool = False,
     clasificacion: dict | None = None,
-    # Parámetros opcionales para mensajes REM
+    # Parámetro opcional para mensajes REM
     rem_stake: float | None = None,
-    rem_historial: str | None = None,
 ) -> str:
     """
     Construye el mensaje inicial (sin resultado).
     para_free=True oculta las cuotas detalladas.
     clasificacion=dict activa el bloque de nivel/stake al inicio.
-    rem_stake / rem_historial se usan cuando fase == "REM".
+    rem_stake se usa cuando fase == "REM".
     """
     fase = detectar_fase_por_codigo(datos) or ""
 
     if fase == "REM":
-        # Recordatorio de kickoff — usa stake e historial pre-calculados
+        # Recordatorio de kickoff — usa stake pre-calculado por scorer_pre
         msg = _construir_rem(
             datos,
             tipo_pick,
-            stake     = rem_stake    if rem_stake    is not None else 1.0,
-            historial = rem_historial if rem_historial is not None else "Sin historial aún",
+            stake = rem_stake if rem_stake is not None else 1.0,
         )
         return msg.strip()  # sin clasificación ni filtro free en recordatorios
     elif fase == "PRE":

@@ -158,6 +158,9 @@ def init_db() -> None:
             cur.execute("""
                 ALTER TABLE picks ADD COLUMN IF NOT EXISTS nivel TEXT;
             """)
+            cur.execute("""
+                ALTER TABLE picks ADD COLUMN IF NOT EXISTS sistema TEXT;
+            """)
 
             # Índices útiles para filtrar por fecha y tipo
             cur.execute("""
@@ -261,6 +264,7 @@ def db_registrar_pick(
     fecha_hora: str,
     odds: float | None = None,
     nivel: str | None = None,
+    sistema: str | None = None,
 ) -> None:
     params = (
         message_id_origen, codigo, tipo_pick, periodo_codigo, modo_codigo,
@@ -268,7 +272,7 @@ def db_registrar_pick(
         strike_alerta, strike_liga, strike_alerta_pct, strike_liga_pct,
         enviado_a_free, minuto_alerta, goles_entrada_total,
         corners_entrada_total, red_cards_entrada_total,
-        momentum_local, momentum_visitante, odds, nivel, fecha, fecha_hora,
+        momentum_local, momentum_visitante, odds, nivel, sistema, fecha, fecha_hora,
     )
     # Un reintento automático ante fallos transitorios de red/DB
     for intento in range(2):
@@ -282,11 +286,11 @@ def db_registrar_pick(
                             strike_alerta, strike_liga, strike_alerta_pct, strike_liga_pct,
                             resultado, enviado_a_free, minuto_alerta, goles_entrada_total,
                             corners_entrada_total, red_cards_entrada_total,
-                            momentum_local, momentum_visitante, odds, nivel, fecha, fecha_hora
+                            momentum_local, momentum_visitante, odds, nivel, sistema, fecha, fecha_hora
                         )
                         VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         ON CONFLICT (message_id_origen) DO NOTHING;
                     """, params)
@@ -444,6 +448,16 @@ def db_picks_por_periodo(periodo: str) -> list[dict]:
     except Exception as e:
         logger.error(f"Error leyendo picks de DB ({periodo}): {e}")
         return []
+
+
+def db_picks_pre_por_periodo(periodo: str) -> list[dict]:
+    """
+    Devuelve solo picks PRE_* del período indicado, para los resúmenes
+    de los canales prepartido (Carlos Mollar y General).
+    Reutiliza db_picks_por_periodo y filtra en Python.
+    """
+    todos = db_picks_por_periodo(periodo)
+    return [p for p in todos if (p.get("codigo") or "").upper().startswith("PRE_")]
 
 
 def db_picks_filtrados(

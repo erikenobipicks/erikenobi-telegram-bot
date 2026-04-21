@@ -22,6 +22,7 @@ from db import (
     db_actualizar_resultado_confirmado,
     db_pick_por_message_id,
     db_picks_por_periodo,
+    db_picks_pre_por_periodo,
     db_picks_filtrados,
     db_picks_para_analisis,
     db_picks_pendientes_revision,
@@ -33,7 +34,7 @@ from db import (
     db_buscar_pre_para_rem,
     db_stats_pre_rapido,
 )
-from config import RESUMENES_CONFIG, RACHA_MINIMA, CANAL_RACHA_ID, CANAL_PRE_ID, ADMIN_IDS
+from config import RESUMENES_CONFIG, RACHA_MINIMA, CANAL_RACHA_ID, CANAL_PRE_ID, CANAL_PRE_GENERAL_ID, ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +283,7 @@ def registrar_pick_estadistica(
         fecha_hora        = ahora_str(),
         odds              = odds,
         nivel             = nivel,
+        sistema           = datos.get("sistema"),
     )
 
 
@@ -1290,6 +1292,165 @@ async def enviar_resumen_prepartido_comando(update) -> None:
         await update.message.reply_text("No hay picks prepartido registrados aún.")
         return
     await update.message.reply_text(texto, parse_mode="HTML")
+
+
+def _es_carlos_mollar_pick(pick: dict) -> bool:
+    """Devuelve True si el pick pertenece al sistema Carlos Mollar."""
+    sistema = (pick.get("sistema") or "").upper()
+    return "CARLOS" in sistema
+
+
+def _profit_pre(subset: list) -> tuple[float, float, int]:
+    """
+    Calcula profit y ROI usando la cuota real guardada en cada pick PRE.
+    HIT  → +(odds - 1)u  (cuota real del pick)
+    MISS → -1u
+    VOID → 0u (stake devuelto, no cuenta para profit pero sí para staked)
+    Picks sin cuota registrada: se incluyen solo si tienen resultado MISS (stake -1u).
+    """
+    profit = 0.0
+    staked = 0
+    for x in subset:
+        r = x.get("resultado")
+        odds_val = x.get("odds")
+        odds = float(odds_val) if odds_val is not None else 0.0
+        if r == "HIT" and odds > 1.0:
+            profit += odds - 1.0
+            staked += 1
+        elif r == "MISS":
+            profit -= 1.0
+            staked += 1
+        elif r == "VOID":
+            staked += 1
+    roi = round(profit / staked * 100, 1) if staked > 0 else 0.0
+    return round(profit, 2), roi, staked
+
+
+def construir_resumen_pre_canal(lista: list, titulo: str) -> str:
+    """
+    Construye el texto de resumen para un canal prepartido a partir de la lista
+    de picks PRE_* del período. Usa cuota real para profit/ROI.
+    """
+    total      = len(lista)
+    hits       = sum(1 for x in lista if x.get("resultado") == "HIT")
+    miss       = sum(1 for x in lista if x.get("resultado") == "MISS")
+    voids      = sum(1 for x in lista if x.get("resultado") == "VOID")
+    pendientes = total - hits - miss - voids
+
+    base_wr = hits + miss
+    wr      = round((hits / base_wr) * 100, 1) if base_wr > 0 else 0.0
+
+    profit_tot, roi_tot, staked_tot = _profit_pre(lista)
+
+    wr_txt   = f"<b>{wr}%</b>" if base_wr > 0 else "<b>—</b>"
+    pend_txt = f"  ·  ⏳ <i>{pendientes} pend.</i>" if pendientes > 0 else ""
+
+    lineas = [
+        f"<b>{titulo}</b>",
+        f"📅 {_fecha_legible()}",
+        "──────────────────",
+        "",
+        f"🎯 Strike: {wr_txt}",
+        f"✅ <b>{hits}</b> Hits  ·  ❌ <b>{miss}</b> Miss  ·  ⚪ <b>{voids}</b> Nulos{pend_txt}",
+        f"📦 {total} picks en total",
+    ]
+
+    if staked_tot > 0:
+        lineas.append("")
+        lineas.append(
+            f"💰 Profit (cuota real): <b>{_fmt_profit(profit_tot, roi_tot)}</b>"
+            f"  <i>({staked_tot} picks)</i>"
+        )
+
+    return "\n".join(lineas)
+
+
+# Configuración de los dos canales prepartido para los resúmenes automáticos
+_PRE_CANALES_CONFIG = [
+    {
+        "id":            "pre_carlos_mollar",
+        "canal_id":      CANAL_PRE_ID,
+        "es_carlos_mollar": True,
+        "label":         "CARLOS MOLLAR",
+    },
+    {
+        "id":            "pre_general",
+        "canal_id":      CANAL_PRE_GENERAL_ID,
+        "es_carlos_mollar": False,
+        "label":         "GENERAL",
+    },
+]
+
+_TITULOS_PRE = {
+    "dia":    "RESUMEN PREPARTIDO — DÍA",
+    "semana": "RESUMEN PREPARTIDO — SEMANA",
+    "mes":    "RESUMEN PREPARTIDO — MES",
+}
+
+
+async def publicar_resumenes_pre_si_toca(context, periodo: str) -> None:
+    """
+    Publica resúmenes de picks prepartido en cada canal (Carlos Mollar y General).
+    Cada canal recibe únicamente los picks publicados en él, analizados
+    de forma independiente con sus resultados reales.
+
+    Compuertas horarias:
+      dia    → ≥ 23h
+      semana → lunes ≥ 23h
+      mes    → día 1 ≥ 9h
+    """
+    ahora_local = ahora_madrid()
+    if periodo == "dia" and ahora_local.hour < 23:
+        return
+    if periodo == "semana" and (ahora_local.weekday() != 0 or ahora_local.hour < 23):
+        return
+    if periodo == "mes" and (ahora_local.day != 1 or ahora_local.hour < 9):
+        return
+
+    clave_valor = _clave_periodo(periodo)
+    periodo_db  = _PERIODO_DB_AUTO.get(periodo, periodo)
+    picks_pre   = db_picks_pre_por_periodo(periodo_db)
+
+    logger.info(
+        "Resumen PRE %s: %d picks PRE encontrados (periodo_db=%s).",
+        periodo, len(picks_pre), periodo_db,
+    )
+
+    titulo = _TITULOS_PRE.get(periodo, "RESUMEN PREPARTIDO")
+
+    for cfg in _PRE_CANALES_CONFIG:
+        clave_control = f"{cfg['id']}_{periodo}"
+        if db_ya_publicado(clave_control, clave_valor):
+            continue
+
+        lista = [p for p in picks_pre if _es_carlos_mollar_pick(p) == cfg["es_carlos_mollar"]]
+
+        if not lista:
+            db_marcar_publicado(clave_control, clave_valor)
+            logger.info(
+                "Resumen PRE %s/%s (%s): sin picks, se omite.",
+                cfg["id"], periodo, cfg["label"],
+            )
+            continue
+
+        texto = construir_resumen_pre_canal(lista, f"{titulo} — {cfg['label']}")
+
+        try:
+            await context.bot.send_message(
+                chat_id    = cfg["canal_id"],
+                text       = texto,
+                parse_mode = "HTML",
+            )
+            db_marcar_publicado(clave_control, clave_valor)
+            logger.info(
+                "Resumen PRE %s/%s publicado en canal %s",
+                cfg["id"], periodo, cfg["canal_id"],
+            )
+        except Exception as e:
+            logger.error(
+                "Error publicando resumen PRE %s/%s: %s",
+                cfg["id"], periodo, e,
+            )
 
 
 async def publicar_resumen_pre_mensual_si_toca(context) -> None:
