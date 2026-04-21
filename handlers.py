@@ -91,6 +91,38 @@ def _es_carlos_mollar(datos: dict) -> bool:
     return "CARLOS" in (datos.get("sistema") or "").upper()
 
 
+# ══════════════════════════════════════════════════════════════════════
+# BUFFER CARLOS MOLLAR — ventana STK5
+# ══════════════════════════════════════════════════════════════════════
+#
+# Cuando llegan varias alertas CM del mismo partido en ráfaga rápida
+# (ej: una sin STK5 y otra con STK5), el buffer espera _CM_BUFFER_SEG
+# segundos antes de decidir cuál publicar.
+#
+# Regla de selección:
+#   - Si alguna alerta tiene STK5 → publicar ESA (stake 5u), descartar resto
+#   - Si ninguna tiene STK5     → publicar la primera llegada (stake 3u)
+#
+# Las alertas CM siempre van a CANAL_PRE_ID (no pasan por el routing general).
+# ══════════════════════════════════════════════════════════════════════
+
+_CM_BUFFER_SEG = 8   # segundos de ventana para agrupar alertas del mismo partido
+
+# buffer_key → {"alertas": [...], "task": asyncio.Task | None}
+_cm_buffer: dict[str, dict] = {}
+
+
+def _cm_stake(datos: dict) -> float:
+    """Stake fijo Carlos Mollar: STK5 → 5.0u, sin STK5 → 3.0u."""
+    return 5.0 if datos.get("stk5") else 3.0
+
+
+def _cm_key(datos: dict, tipo_pick: str, fase: str) -> str:
+    """Clave de buffer: agrupa alertas CM del mismo partido/tipo/fase."""
+    partido = " ".join((datos.get("partido") or "").upper().split())
+    return f"{fase}|{tipo_pick}|{partido}"
+
+
 def _normalizar_alerta(valor: str | None) -> str:
     if not valor:
         return ""
@@ -414,6 +446,175 @@ async def editar_mensaje(
         )
 
 
+# ══════════════════════════════════════════════════════════════════════
+# PUBLICACIÓN CARLOS MOLLAR — llamadas desde el buffer
+# ══════════════════════════════════════════════════════════════════════
+
+async def _publicar_cm_rem(
+    context: ContextTypes.DEFAULT_TYPE,
+    datos: dict,
+    tipo_pick: str,
+    msg_id: int,
+    stake: float,
+) -> None:
+    """Publica el recordatorio REM de Carlos Mollar elegido por el buffer."""
+    codigo_rem = (datos.get("codigo") or "").upper()
+    codigo_pre = "PRE_" + codigo_rem[4:]
+
+    mensaje_rem = construir_mensaje_base(datos, tipo_pick, rem_stake=stake)
+
+    logger.info(
+        "CM-REM | tipo: %s | codigo_pre: %s | stake: %.1fu | stk5: %s | msg_id: %s",
+        tipo_pick, codigo_pre, stake, datos.get("stk5"), msg_id,
+    )
+
+    destinos_publicados: dict[str, int] = {}
+    try:
+        enviado = await enviar_mensaje(context, CANAL_PRE_ID, mensaje_rem)
+        destinos_publicados[str(CANAL_PRE_ID)] = enviado.message_id
+        logger.info("CM-REM enviado a %s (msg %s)", CANAL_PRE_ID, enviado.message_id)
+    except Exception as e:
+        logger.error("Error enviando CM-REM a %s: %s", CANAL_PRE_ID, e)
+
+    if destinos_publicados:
+        _registrar_alerta_reciente(datos, tipo_pick)
+        STATE["mensajes_publicados"][str(msg_id)] = {
+            "tipo_pick":         tipo_pick,
+            "mensaje_base":      mensaje_rem,
+            "mensaje_base_free": mensaje_rem,
+            "destinos":          destinos_publicados,
+            "es_recordatorio":   True,
+            "codigo_pre":        codigo_pre,
+            "partido":           datos.get("partido") or "",
+        }
+        db_guardar_publicacion(
+            str(msg_id), mensaje_rem, mensaje_rem,
+            json.dumps(destinos_publicados, ensure_ascii=False),
+        )
+    save_state()
+
+
+async def _publicar_cm_pre(
+    context: ContextTypes.DEFAULT_TYPE,
+    datos: dict,
+    tipo_pick: str,
+    msg_id: int,
+    stake: float,
+) -> None:
+    """Publica el pick PRE de Carlos Mollar elegido por el buffer."""
+    datos["stake"] = stake   # el formateador lo muestra en el mensaje
+    mensaje_pre = construir_mensaje_base(datos, tipo_pick)
+
+    logger.info(
+        "CM-PRE | tipo: %s | codigo: %s | stake: %.1fu | stk5: %s | msg_id: %s",
+        tipo_pick, datos.get("codigo"), stake, datos.get("stk5"), msg_id,
+    )
+
+    destinos_publicados: dict[str, int] = {}
+    try:
+        enviado = await enviar_mensaje(context, CANAL_PRE_ID, mensaje_pre)
+        destinos_publicados[str(CANAL_PRE_ID)] = enviado.message_id
+        logger.info("CM-PRE enviado a %s (msg %s)", CANAL_PRE_ID, enviado.message_id)
+    except Exception as e:
+        logger.error("Error enviando CM-PRE a %s: %s", CANAL_PRE_ID, e)
+
+    if destinos_publicados:
+        _registrar_alerta_reciente(datos, tipo_pick)
+        registrar_pick_estadistica(msg_id, datos, tipo_pick, enviado_a_free=False)
+        db_guardar_publicacion(
+            str(msg_id), mensaje_pre, mensaje_pre,
+            json.dumps(destinos_publicados, ensure_ascii=False),
+        )
+        STATE["mensajes_publicados"][str(msg_id)] = {
+            "tipo_pick":         tipo_pick,
+            "mensaje_base":      mensaje_pre,
+            "mensaje_base_free": mensaje_pre,
+            "destinos":          destinos_publicados,
+        }
+    save_state()
+
+
+async def _despachar_cm(
+    context: ContextTypes.DEFAULT_TYPE,
+    buffer_key: str,
+) -> None:
+    """
+    Espera _CM_BUFFER_SEG segundos y publica el pick Carlos Mollar
+    de mayor prioridad del buffer:
+      - Si existe alguno con STK5 → se publica ESE (stake 5u).
+      - Si no hay STK5 → se publica el primero en llegar (stake 3u).
+    El resto de alertas del buffer se descartan silenciosamente.
+    """
+    await asyncio.sleep(_CM_BUFFER_SEG)
+
+    entry = _cm_buffer.pop(buffer_key, None)
+    if not entry:
+        return
+
+    alertas = entry["alertas"]
+
+    # Preferencia: STK5 primero; si no hay, la primera llegada
+    mejor = next((a for a in alertas if a["datos"].get("stk5")), alertas[0])
+    descartadas = len(alertas) - 1
+    if descartadas > 0:
+        logger.info(
+            "CM buffer: %d alerta(s) descartada(s) para '%s' — publicando msg %s (stk5=%s)",
+            descartadas,
+            mejor["datos"].get("partido"),
+            mejor["msg_id"],
+            mejor["datos"].get("stk5"),
+        )
+
+    stake = _cm_stake(mejor["datos"])
+
+    if mejor["fase"] == "REM":
+        await _publicar_cm_rem(
+            context, mejor["datos"], mejor["tipo_pick"], mejor["msg_id"], stake,
+        )
+    elif mejor["fase"] == "PRE":
+        await _publicar_cm_pre(
+            context, mejor["datos"], mejor["tipo_pick"], mejor["msg_id"], stake,
+        )
+
+
+async def _encolar_cm(
+    context: ContextTypes.DEFAULT_TYPE,
+    datos: dict,
+    tipo_pick: str,
+    msg_id: int,
+    fase: str,
+) -> None:
+    """
+    Añade el pick Carlos Mollar al buffer y lanza el temporizador de despacho
+    si aún no estaba activo para este partido/tipo/fase.
+    Las alertas posteriores del mismo grupo se añaden al buffer existente
+    sin reiniciar el temporizador.
+    """
+    key = _cm_key(datos, tipo_pick, fase)
+
+    if key not in _cm_buffer:
+        _cm_buffer[key] = {"alertas": [], "task": None}
+
+    _cm_buffer[key]["alertas"].append({
+        "datos":     datos,
+        "tipo_pick": tipo_pick,
+        "msg_id":    msg_id,
+        "fase":      fase,
+    })
+
+    n = len(_cm_buffer[key]["alertas"])
+    logger.info(
+        "CM buffer | fase: %s | partido: %s | stk5: %s | msg_id: %s | alertas en buffer: %d",
+        fase, datos.get("partido"), datos.get("stk5"), msg_id, n,
+    )
+
+    # El temporizador se crea solo una vez (al llegar la primera alerta del grupo).
+    # Las siguientes se añaden al buffer mientras el timer está corriendo.
+    existing = _cm_buffer[key].get("task")
+    if existing is None or existing.done():
+        _cm_buffer[key]["task"] = asyncio.create_task(_despachar_cm(context, key))
+
+
 # ==============================
 # PROCESAR MENSAJE NUEVO
 # ==============================
@@ -439,6 +640,14 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
     fase = detectar_fase_por_codigo(datos)
     es_prepartido   = (fase == "PRE")
     es_recordatorio = (fase == "REM")
+
+    # ── Carlos Mollar PRE/REM → buffer con ventana STK5 ──────────────
+    # Bypassa el check de duplicados estándar: el buffer gestiona la
+    # selección interna (STK5 > no-STK5) y registra la alerta como
+    # "reciente" solo cuando realmente se publica.
+    if (es_prepartido or es_recordatorio) and _es_carlos_mollar(datos):
+        await _encolar_cm(context, datos, tipo_pick, msg_id, fase)
+        return
 
     if _es_alerta_duplicada(datos, tipo_pick):
         logger.info(

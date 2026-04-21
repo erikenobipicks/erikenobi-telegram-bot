@@ -48,7 +48,8 @@ def extraer_datos(texto: str) -> dict:
         "marcador_descanso": None,
         "marcador_final": None,
         "kickoff": None,
-        "sistema": None,   # etiqueta libre en partes[6] de alertas REM (ej: "CARLOS_MOLLAR")
+        "sistema": None,   # etiqueta libre en partes[6] de alertas PRE/REM (ej: "CARLOS_MOLLAR")
+        "stk5":    False,  # True si partes[7] == "STK5" — pick prioritario stake alto
     }
 
     lineas = [line.strip() for line in texto.splitlines() if line.strip()]
@@ -65,13 +66,17 @@ def extraer_datos(texto: str) -> dict:
 
         datos["picks"] = extraer_numero_picks_desde_titulo(titulo_limpio)
 
-        # Sistema: segmento libre en partes[6] de alertas PRE_* y REM_* (ej: "CARLOS_MOLLAR")
-        # Se filtra para no confundir con tokens técnicos: T12H, T24H, números, %.
+        # Sistema y STK5: segmentos libres en partes[6] y partes[7] de alertas PRE_*/REM_*.
+        # partes[6] → sistema (ej: "CARLOS_MOLLAR"); se filtra tokens técnicos.
+        # partes[7] → "STK5" activa el flag de stake alto y prioridad en el buffer.
         _codigo0 = partes[0].upper() if partes else ""
         if (_codigo0.startswith("REM_") or _codigo0.startswith("PRE_")) and len(partes) >= 7:
             _raw_sis = partes[6].strip()
             if _raw_sis and not re.match(r"^T\d+[Hh]$|^\d+\.?\d*%?$", _raw_sis):
                 datos["sistema"] = _raw_sis
+            # STK5 en partes[7]
+            if len(partes) >= 8 and partes[7].strip().upper() == "STK5":
+                datos["stk5"] = True
 
         titulo_visible = None
         if len(partes) >= 2:
