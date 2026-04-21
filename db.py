@@ -1069,6 +1069,49 @@ def db_score_por_dimension(
         return 0, 0
 
 
+def db_stats_pre_rapido(
+    codigo: str,
+    tipo_pick: str,
+    dias: int = 365,
+) -> dict:
+    """
+    Devuelve en una sola consulta todos los contadores necesarios para el
+    historial del recordatorio REM: hits, misses, voids, pendientes y total.
+
+    A diferencia de db_picks_para_analisis (que solo devuelve HIT/MISS),
+    aquí se incluyen todos los picks del código — resueltos y pendientes —
+    para que el historial muestre cuántos hay en espera de resultado.
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        COUNT(*)                                               AS total,
+                        SUM(CASE WHEN resultado = 'HIT'  THEN 1 ELSE 0 END)  AS hits,
+                        SUM(CASE WHEN resultado = 'MISS' THEN 1 ELSE 0 END)  AS misses,
+                        SUM(CASE WHEN resultado = 'VOID' THEN 1 ELSE 0 END)  AS voids,
+                        SUM(CASE WHEN resultado IS NULL  THEN 1 ELSE 0 END)  AS pendientes
+                    FROM picks
+                    WHERE codigo ILIKE %s
+                      AND tipo_pick = %s
+                      AND fecha >= (CURRENT_DATE - (%s * INTERVAL '1 day')::INTERVAL)::date;
+                """, (codigo, tipo_pick, dias))
+                row = cur.fetchone()
+                if row:
+                    return {
+                        "total":      int(row["total"]      or 0),
+                        "hits":       int(row["hits"]       or 0),
+                        "misses":     int(row["misses"]     or 0),
+                        "voids":      int(row["voids"]      or 0),
+                        "pendientes": int(row["pendientes"] or 0),
+                    }
+                return {"total": 0, "hits": 0, "misses": 0, "voids": 0, "pendientes": 0}
+    except Exception as e:
+        logger.error("Error en db_stats_pre_rapido (codigo=%s): %s", codigo, e)
+        return {"total": 0, "hits": 0, "misses": 0, "voids": 0, "pendientes": 0}
+
+
 def db_score_pre_por_dimension(
     codigo: str | None = None,
     liga: str | None = None,

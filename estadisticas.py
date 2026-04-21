@@ -31,6 +31,7 @@ from db import (
     db_stats_prepartido_por_mes,
     db_stats_prepartido_global,
     db_buscar_pre_para_rem,
+    db_stats_pre_rapido,
 )
 from config import RESUMENES_CONFIG, RACHA_MINIMA, CANAL_RACHA_ID, CANAL_PRE_ID, ADMIN_IDS
 
@@ -107,26 +108,42 @@ def historial_pre_str(codigo_pre: str, tipo_pick: str) -> str:
     """
     Devuelve una cadena corta con el historial del código PRE para mostrar
     en el mensaje del recordatorio.
-    Ejemplo: '8✅ 3❌ 1⚪ de 12 (66.7% | ROI +3.5%)'
-    """
-    picks = db_picks_para_analisis(codigo=codigo_pre, tipo_pick=tipo_pick, dias=180)
-    resueltos = [p for p in picks if p.get("resultado") in ("HIT", "MISS", "VOID")]
 
-    n = len(resueltos)
-    if n == 0:
+    Usa db_stats_pre_rapido para obtener en una sola consulta: hits, misses,
+    voids, pendientes y total — así el historial refleja también los picks
+    que aún no tienen resultado asignado.
+
+    Ejemplos de salida:
+      '8✅ 3❌ 1⚪ de 12  (72.7% | ROI +14.2%)'
+      '2✅ 0❌ de 2 · ⏳13 pend.  (100.0% | ROI +70.0%)'
+      'Sin resultados aún · 5 registrados'
+      'Sin historial aún'
+    """
+    s = db_stats_pre_rapido(codigo_pre, tipo_pick, dias=365)
+
+    hits       = s["hits"]
+    misses     = s["misses"]
+    voids      = s["voids"]
+    pendientes = s["pendientes"]
+    total      = s["total"]
+    resueltos  = hits + misses + voids
+
+    if resueltos == 0:
+        if total > 0:
+            return f"Sin resultados aún · {total} registrado{'s' if total != 1 else ''}"
         return "Sin historial aún"
 
-    hits   = sum(1 for p in resueltos if p.get("resultado") == "HIT")
-    misses = sum(1 for p in resueltos if p.get("resultado") == "MISS")
-    voids  = sum(1 for p in resueltos if p.get("resultado") == "VOID")
-    base   = hits + misses + voids
-    wr     = round(hits / base * 100, 1) if base > 0 else 0.0
-    profit = hits * 0.70 - misses * 1.0
-    roi    = round(profit / base * 100, 1) if base > 0 else 0.0
+    # WR y ROI solo sobre picks con resultado real (excluyendo VOID del denominador)
+    base_wr = hits + misses
+    wr      = round(hits / base_wr * 100, 1) if base_wr > 0 else 0.0
+    profit  = hits * 0.70 - misses * 1.0
+    roi     = round(profit / base_wr * 100, 1) if base_wr > 0 else 0.0
     roi_str = f"+{roi:.1f}%" if roi >= 0 else f"{roi:.1f}%"
 
     void_txt = f" {voids}⚪" if voids > 0 else ""
-    return f"{hits}✅ {misses}❌{void_txt} de {n}  ({wr}% | ROI {roi_str})"
+    pend_txt = f" · ⏳{pendientes} pend." if pendientes > 0 else ""
+
+    return f"{hits}✅ {misses}❌{void_txt} de {resueltos}{pend_txt}  ({wr}% | ROI {roi_str})"
 
 
 def propagar_resultado_rem_a_pre(
