@@ -781,7 +781,15 @@ def _construir_rem(
     else:
         stake_txt = f"{stake:.1f}u"
 
-    lineas = [f"⏰ <b>RECORDATORIO</b> | {emoji} {_esc(mercado)} | {partido}"]
+    # Sistema: etiqueta libre extraída de partes[6] (ej: "CARLOS_MOLLAR" → "Carlos Mollar")
+    sistema_raw = datos.get("sistema") or ""
+    sistema_legible = sistema_raw.replace("_", " ").title() if sistema_raw else ""
+
+    header = f"⏰ <b>RECORDATORIO</b> | {emoji} {_esc(mercado)} | {partido}"
+    if sistema_legible:
+        header += f" | <i>{_esc(sistema_legible)}</i>"
+
+    lineas = [header]
     lineas.append("")
 
     if liga:
@@ -796,6 +804,9 @@ def _construir_rem(
 
     lineas.append("")
     lineas.append(f"📊 Historial: <i>{_esc(historial)}</i>")
+
+    if sistema_legible:
+        lineas.append(f"📋 Sistema: <b>{_esc(sistema_legible)}</b>")
 
     return "\n".join(lineas)
 

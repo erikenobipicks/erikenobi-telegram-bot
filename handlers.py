@@ -57,6 +57,32 @@ from estadisticas import (
 logger = logging.getLogger(__name__)
 
 
+def _extraer_odds_pre(datos: dict, codigo: str) -> float | None:
+    """
+    Extrae la cuota numérica de un pick prepartido a partir del código.
+    Usada para pasar odds al scorer_pre y calcular el stake dinámico.
+    """
+    codigo_up = codigo.upper()
+    odds_raw = ""
+    if "O25" in codigo_up or "OVER2.5" in codigo_up:
+        odds_raw = datos.get("odds_over_2_5") or ""
+    elif "O15" in codigo_up or "OVER1.5" in codigo_up:
+        odds_raw = datos.get("odds_over_1_5") or ""
+    elif "O05" in codigo_up or "OVER0.5" in codigo_up:
+        odds_raw = datos.get("odds_over_0_5") or ""
+    elif "1X" in codigo_up:
+        raw_1x2 = datos.get("odds_1x2") or ""
+        odds_raw = raw_1x2.split()[0] if raw_1x2.split() else ""
+
+    partes_odds = [p.strip() for p in odds_raw.replace("|", " ").split() if p.strip()]
+    if partes_odds:
+        try:
+            return float(partes_odds[0].replace(",", "."))
+        except ValueError:
+            pass
+    return None
+
+
 def _normalizar_alerta(valor: str | None) -> str:
     if not valor:
         return ""
@@ -424,8 +450,10 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
         codigo_rem = (datos.get("codigo") or "").upper()   # REM_O25FT
         codigo_pre = "PRE_" + codigo_rem[4:]               # PRE_O25FT
 
-        # Stake e historial basados en el rendimiento acumulado del PRE
-        stake    = calcular_stake_pre(codigo_pre, tipo_pick)
+        # Stake dinámico: scorer_pre usa liga y cuota real del alert
+        _liga_rem = datos.get("liga")
+        _odds_rem = _extraer_odds_pre(datos, codigo_pre)
+        stake     = calcular_stake_pre(codigo_pre, tipo_pick, liga=_liga_rem, odds=_odds_rem)
         historial = historial_pre_str(codigo_pre, tipo_pick)
 
         mensaje_rem = construir_mensaje_base(
@@ -477,8 +505,18 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
             logger.warning("Pick prepartido recibido pero CANAL_PRE_ID no configurado.")
             return
 
+        # Stake dinámico con scorer_pre (liga + cuota real del alert)
+        _codigo_pre = (datos.get("codigo") or "").upper()
+        _odds_pre   = _extraer_odds_pre(datos, _codigo_pre)
+        _liga_pre   = datos.get("liga")
+        _stake_pre  = calcular_stake_pre(_codigo_pre, tipo_pick, liga=_liga_pre, odds=_odds_pre)
+        datos["stake"] = _stake_pre   # formateador lo usa para mostrar en el mensaje
+
         mensaje_pre = construir_mensaje_base(datos, tipo_pick)
-        logger.info(f"PREPARTIDO | tipo: {tipo_pick} | origen msg_id: {msg_id}")
+        logger.info(
+            "PREPARTIDO | tipo: %s | codigo: %s | stake: %.1fu | origen msg_id: %s",
+            tipo_pick, _codigo_pre, _stake_pre, msg_id,
+        )
 
         destinos_publicados: dict[str, int] = {}
         try:

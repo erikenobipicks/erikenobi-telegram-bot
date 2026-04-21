@@ -41,39 +41,66 @@ logger = logging.getLogger(__name__)
 # REGISTRO DE PICKS
 # ==============================
 
-def calcular_stake_pre(codigo_pre: str, tipo_pick: str) -> float:
+def calcular_stake_pre(
+    codigo_pre: str,
+    tipo_pick: str,
+    liga: str | None = None,
+    odds: float | None = None,
+) -> float:
     """
-    Calcula el stake recomendado para un pick PRE en base al historial acumulado en DB.
+    Calcula el stake recomendado para un pick PRE usando un modelo en dos capas:
 
-    Modelo basado en ROI a cuota 1.70 de referencia:
-      < 10 picks resueltos  → 1.0u  (sin muestra suficiente)
-      ROI < -10%            → 0.0u  (en pérdidas, pausar)
-      ROI  0%-10%           → 1.0u
-      ROI 10%-20%, WR≥60%  → 1.5u
-      ROI > 20%,  WR≥65%   → 2.0u
+    1. Guardián de ROI: si la estrategia acumula ROI < -15% con muestra ≥ 10
+       devuelve 0u — evitar apostar en una estrategia en pérdidas sostenidas.
+
+    2. scorer_pre (Bayesian): score 0-100 sobre 3 dimensiones (codigo, liga,
+       odds_range).  Ajusta el stake base 1u en ±0.5u cuando la confianza es
+       media o alta.  Rango resultante: 0.5u – 1.5u.
+
+    Con muestra insuficiente (< 10 resueltos) siempre devuelve 1.0u sin ajuste.
+    Los parámetros liga y odds son opcionales; se usan para las dimensiones
+    de liga y odds_range del scorer.
     """
-    picks = db_picks_para_analisis(codigo=codigo_pre, tipo_pick=tipo_pick, dias=180)
+    picks = db_picks_para_analisis(codigo=codigo_pre, tipo_pick=tipo_pick, dias=365)
     resueltos = [p for p in picks if p.get("resultado") in ("HIT", "MISS", "VOID")]
-
     n = len(resueltos)
-    if n < 10:
-        return 1.0  # muestra insuficiente → stake base
 
+    # ── Guardián de pérdidas sostenidas ───────────────────────────────────
     hits   = sum(1 for p in resueltos if p.get("resultado") == "HIT")
     misses = sum(1 for p in resueltos if p.get("resultado") == "MISS")
-    voids  = sum(1 for p in resueltos if p.get("resultado") == "VOID")
-    base   = hits + misses + voids
-    wr     = hits / base if base > 0 else 0.0
-    profit = hits * 0.70 - misses * 1.0
-    roi    = profit / base if base > 0 else 0.0
+    base   = hits + misses
+    if base >= 10:
+        profit = hits * 0.70 - misses * 1.0
+        roi    = profit / base
+        if roi < -0.15:
+            logger.info(
+                "calcular_stake_pre: %s en pérdidas (ROI %.1f%%) → 0u",
+                codigo_pre, roi * 100,
+            )
+            return 0.0
 
-    if roi < -0.10:
-        return 0.0
-    if roi >= 0.20 and wr >= 0.65:
-        return 2.0
-    if roi >= 0.10 and wr >= 0.60:
-        return 1.5
-    return 1.0
+    # ── Sin muestra suficiente → stake base sin ajuste ────────────────────
+    if n < 10:
+        return 1.0
+
+    # ── scorer_pre: ajuste bayesiano multidimensional ─────────────────────
+    stake_delta = 0.0
+    try:
+        from scorer_pre import calcular_score_pre
+        info = calcular_score_pre(codigo_pre, tipo_pick, liga=liga, odds=odds)
+        stake_delta = info.get("stake_delta", 0.0)
+        logger.debug(
+            "scorer_pre | %s | score=%d | confianza=%s | delta=%+.1f",
+            codigo_pre,
+            info.get("score", 0),
+            info.get("confianza", "?"),
+            stake_delta,
+        )
+    except Exception as e:
+        logger.warning("Error en scorer_pre para %s: %s", codigo_pre, e)
+
+    stake = max(0.5, min(1.5, 1.0 + stake_delta))
+    return round(stake, 1)
 
 
 def historial_pre_str(codigo_pre: str, tipo_pick: str) -> str:

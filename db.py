@@ -1069,6 +1069,64 @@ def db_score_por_dimension(
         return 0, 0
 
 
+def db_score_pre_por_dimension(
+    codigo: str | None = None,
+    liga: str | None = None,
+    odds_min: float | None = None,
+    odds_max: float | None = None,
+    dias: int = 365,
+) -> tuple[int, int]:
+    """
+    Devuelve (hits, total) de picks PRE resueltos para la dimensión indicada.
+    Análogo a db_score_por_dimension pero solo para PRE_* con ventana anual.
+    Usado por scorer_pre.py para el cálculo bayesiano del stake.
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                condiciones = [
+                    "codigo ILIKE 'PRE_%'",
+                    "resultado IN ('HIT', 'MISS')",
+                    "fecha >= (CURRENT_DATE - (%s * INTERVAL '1 day')::INTERVAL)::date",
+                ]
+                params: list = [dias]
+
+                if codigo is not None:
+                    condiciones.append("codigo ILIKE %s")
+                    params.append(codigo)
+
+                if liga is not None:
+                    condiciones.append("liga ILIKE %s")
+                    params.append(liga)
+
+                if odds_min is not None:
+                    condiciones.append("odds >= %s")
+                    params.append(odds_min)
+
+                if odds_max is not None:
+                    condiciones.append("odds < %s")
+                    params.append(odds_max)
+
+                where = " AND ".join(condiciones)
+                cur.execute(
+                    f"""
+                    SELECT
+                        SUM(CASE WHEN resultado = 'HIT' THEN 1 ELSE 0 END) AS hits,
+                        COUNT(*) AS total
+                    FROM picks
+                    WHERE {where};
+                    """,
+                    params,
+                )
+                row = cur.fetchone()
+                if row and row["total"]:
+                    return int(row["hits"] or 0), int(row["total"])
+                return 0, 0
+    except Exception as e:
+        logger.error("Error en db_score_pre_por_dimension: %s", e)
+        return 0, 0
+
+
 # ==============================
 # MIGRACIÓN DESDE JSON
 # ==============================
