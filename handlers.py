@@ -478,6 +478,14 @@ async def _publicar_cm_rem(
 
     if destinos_publicados:
         _registrar_alerta_reciente(datos, tipo_pick)
+        # Registrar el REM en DB como pick de análisis del canal CM.
+        # Es la única alerta que recibe resultado directo de inplayguru
+        # (sin fuzzy match), por lo que es la fuente fiable para estadísticas.
+        registrar_pick_estadistica(
+            msg_id, datos, tipo_pick,
+            enviado_a_free  = False,
+            stake_override  = stake,
+        )
         STATE["mensajes_publicados"][str(msg_id)] = {
             "tipo_pick":         tipo_pick,
             "mensaje_base":      mensaje_rem,
@@ -520,7 +528,11 @@ async def _publicar_cm_pre(
 
     if destinos_publicados:
         _registrar_alerta_reciente(datos, tipo_pick)
-        registrar_pick_estadistica(msg_id, datos, tipo_pick, enviado_a_free=False)
+        registrar_pick_estadistica(
+            msg_id, datos, tipo_pick,
+            enviado_a_free = False,
+            stake_override = stake,
+        )
         db_guardar_publicacion(
             str(msg_id), mensaje_pre, mensaje_pre,
             json.dumps(destinos_publicados, ensure_ascii=False),

@@ -23,6 +23,7 @@ from db import (
     db_pick_por_message_id,
     db_picks_por_periodo,
     db_picks_pre_por_periodo,
+    db_picks_cm_por_periodo,
     db_picks_filtrados,
     db_picks_para_analisis,
     db_picks_pendientes_revision,
@@ -215,6 +216,7 @@ def registrar_pick_estadistica(
     tipo_pick: str,
     enviado_a_free: bool = False,
     nivel: str | None = None,
+    stake_override: float | None = None,
 ) -> None:
     # Extraer cuota para picks prepartido
     # PRE_1X  → primera cuota de 1X2 (cuota local)
@@ -259,6 +261,18 @@ def registrar_pick_estadistica(
     if momentum_partes:
         momentum_local, momentum_visitante = momentum_partes
 
+    # stake: se usa stake_override si se proporciona (picks CM con stake fijo),
+    # si no se usa datos["stake"] que puede haber sido inyectado por el handler.
+    _stake = stake_override if stake_override is not None else (
+        datos.get("stake") if datos.get("stake") is not None else None
+    )
+    # Convertir a float seguro (evita errores si stake viene como string)
+    if _stake is not None:
+        try:
+            _stake = float(_stake)
+        except (TypeError, ValueError):
+            _stake = None
+
     db_registrar_pick(
         message_id_origen = str(message_id_origen),
         codigo            = datos.get("codigo"),
@@ -284,6 +298,7 @@ def registrar_pick_estadistica(
         odds              = odds,
         nivel             = nivel,
         sistema           = datos.get("sistema"),
+        stake             = _stake,
     )
 
 
@@ -1302,27 +1317,38 @@ def _es_carlos_mollar_pick(pick: dict) -> bool:
 
 def _profit_pre(subset: list) -> tuple[float, float, int]:
     """
-    Calcula profit y ROI usando la cuota real guardada en cada pick PRE.
-    HIT  → +(odds - 1)u  (cuota real del pick)
-    MISS → -1u
-    VOID → 0u (stake devuelto, no cuenta para profit pero sí para staked)
-    Picks sin cuota registrada: se incluyen solo si tienen resultado MISS (stake -1u).
+    Calcula profit y ROI usando la cuota real y el stake real de cada pick.
+
+    HIT  → +(odds - 1) * stake u
+    MISS → -stake u
+    VOID → 0u  (stake devuelto, no cuenta en profit pero sí en picks contabilizados)
+
+    Si el pick no tiene stake guardado en DB, se asume 1.0u (retrocompatibilidad).
+    El ROI se calcula sobre el total invertido (suma de stakes HIT+MISS), no
+    sobre el número de picks — esto es lo correcto con stakes variables.
     """
     profit = 0.0
+    total_invertido = 0.0
     staked = 0
     for x in subset:
         r = x.get("resultado")
         odds_val = x.get("odds")
-        odds = float(odds_val) if odds_val is not None else 0.0
+        stake_val = x.get("stake")
+        odds  = float(odds_val)  if odds_val  is not None else 0.0
+        stake = float(stake_val) if stake_val is not None else 1.0
+
         if r == "HIT" and odds > 1.0:
-            profit += odds - 1.0
+            profit          += stake * (odds - 1.0)
+            total_invertido += stake
             staked += 1
         elif r == "MISS":
-            profit -= 1.0
+            profit          -= stake
+            total_invertido += stake
             staked += 1
         elif r == "VOID":
             staked += 1
-    roi = round(profit / staked * 100, 1) if staked > 0 else 0.0
+
+    roi = round(profit / total_invertido * 100, 1) if total_invertido > 0 else 0.0
     return round(profit, 2), roi, staked
 
 
@@ -1409,21 +1435,28 @@ async def publicar_resumenes_pre_si_toca(context, periodo: str) -> None:
 
     clave_valor = _clave_periodo(periodo)
     periodo_db  = _PERIODO_DB_AUTO.get(periodo, periodo)
-    picks_pre   = db_picks_pre_por_periodo(periodo_db)
-
-    logger.info(
-        "Resumen PRE %s: %d picks PRE encontrados (periodo_db=%s).",
-        periodo, len(picks_pre), periodo_db,
-    )
-
-    titulo = _TITULOS_PRE.get(periodo, "RESUMEN PREPARTIDO")
+    titulo      = _TITULOS_PRE.get(periodo, "RESUMEN PREPARTIDO")
 
     for cfg in _PRE_CANALES_CONFIG:
         clave_control = f"{cfg['id']}_{periodo}"
         if db_ya_publicado(clave_control, clave_valor):
             continue
 
-        lista = [p for p in picks_pre if _es_carlos_mollar_pick(p) == cfg["es_carlos_mollar"]]
+        # Carlos Mollar → picks REM (resultado directo, fiable)
+        # General       → picks PRE sin Carlos Mollar
+        if cfg["es_carlos_mollar"]:
+            lista = db_picks_cm_por_periodo(periodo_db)
+            logger.info(
+                "Resumen PRE CM %s: %d picks REM de Carlos Mollar (periodo_db=%s).",
+                periodo, len(lista), periodo_db,
+            )
+        else:
+            todos_pre = db_picks_pre_por_periodo(periodo_db)
+            lista = [p for p in todos_pre if not _es_carlos_mollar_pick(p)]
+            logger.info(
+                "Resumen PRE General %s: %d picks PRE no-CM (periodo_db=%s).",
+                periodo, len(lista), periodo_db,
+            )
 
         if not lista:
             db_marcar_publicado(clave_control, clave_valor)

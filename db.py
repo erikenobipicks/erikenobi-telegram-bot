@@ -161,6 +161,10 @@ def init_db() -> None:
             cur.execute("""
                 ALTER TABLE picks ADD COLUMN IF NOT EXISTS sistema TEXT;
             """)
+            # stake: unidades apostadas reales por pick (5.0, 3.0, 1.0…)
+            cur.execute("""
+                ALTER TABLE picks ADD COLUMN IF NOT EXISTS stake NUMERIC(4,1);
+            """)
 
             # Índices útiles para filtrar por fecha y tipo
             cur.execute("""
@@ -265,6 +269,7 @@ def db_registrar_pick(
     odds: float | None = None,
     nivel: str | None = None,
     sistema: str | None = None,
+    stake: float | None = None,
 ) -> None:
     params = (
         message_id_origen, codigo, tipo_pick, periodo_codigo, modo_codigo,
@@ -272,7 +277,7 @@ def db_registrar_pick(
         strike_alerta, strike_liga, strike_alerta_pct, strike_liga_pct,
         enviado_a_free, minuto_alerta, goles_entrada_total,
         corners_entrada_total, red_cards_entrada_total,
-        momentum_local, momentum_visitante, odds, nivel, sistema, fecha, fecha_hora,
+        momentum_local, momentum_visitante, odds, nivel, sistema, stake, fecha, fecha_hora,
     )
     # Un reintento automático ante fallos transitorios de red/DB
     for intento in range(2):
@@ -286,11 +291,12 @@ def db_registrar_pick(
                             strike_alerta, strike_liga, strike_alerta_pct, strike_liga_pct,
                             resultado, enviado_a_free, minuto_alerta, goles_entrada_total,
                             corners_entrada_total, red_cards_entrada_total,
-                            momentum_local, momentum_visitante, odds, nivel, sistema, fecha, fecha_hora
+                            momentum_local, momentum_visitante, odds, nivel, sistema, stake,
+                            fecha, fecha_hora
                         )
                         VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         ON CONFLICT (message_id_origen) DO NOTHING;
                     """, params)
@@ -458,6 +464,24 @@ def db_picks_pre_por_periodo(periodo: str) -> list[dict]:
     """
     todos = db_picks_por_periodo(periodo)
     return [p for p in todos if (p.get("codigo") or "").upper().startswith("PRE_")]
+
+
+def db_picks_cm_por_periodo(periodo: str) -> list[dict]:
+    """
+    Devuelve picks REM_* de Carlos Mollar del período para el análisis
+    del canal Carlos Mollar.
+
+    Se usan picks REM (no PRE) porque:
+    - El resultado se actualiza directamente cuando inplayguru edita el
+      mensaje REM (HIT / MISS), sin necesidad de fuzzy match.
+    - Los PRE pueden quedarse pendientes si la propagación falla.
+    """
+    todos = db_picks_por_periodo(periodo)
+    return [
+        p for p in todos
+        if (p.get("codigo") or "").upper().startswith("REM_")
+        and "CARLOS" in (p.get("sistema") or "").upper()
+    ]
 
 
 def db_picks_filtrados(
