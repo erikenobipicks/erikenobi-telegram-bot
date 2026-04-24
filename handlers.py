@@ -1090,6 +1090,32 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
         if (datos.get("codigo") or "").upper() == "NG1":
             _verificar_racha_miss_ng1()
 
+    # ── Recálculo de tier de liga NG1 tras cada resultado ────────────
+    # Se dispara en HIT, MISS o VOID para mantener tasa_eb actualizada.
+    # Nunca bloquea el flujo principal (excepción capturada internamente).
+    if resultado_actual in ("HIT", "MISS", "VOID") and (datos.get("codigo") or "").upper() == "NG1":
+        _liga_recalc = datos.get("liga") or ""
+        if _liga_recalc:
+            try:
+                resultado_recalc = db_recalcular_liga("NG1", _liga_recalc)
+                if resultado_recalc:
+                    logger.info(
+                        "NG1 recálculo liga | liga=%s | picks=%d wins=%d "
+                        "tasa_eb=%.4f | tier %s→%s | cambio=%s",
+                        _liga_recalc,
+                        resultado_recalc["picks"],
+                        resultado_recalc["wins"],
+                        resultado_recalc["tasa_eb"],
+                        resultado_recalc["tier_anterior"],
+                        resultado_recalc["tier_nuevo"],
+                        resultado_recalc["tier_cambio"],
+                    )
+            except Exception as _re:
+                logger.error(
+                    "Error en recálculo tier NG1 para liga '%s': %s — flujo no interrumpido",
+                    _liga_recalc, _re,
+                )
+
     await publicar_resumen_diario_si_toca(context)
     await publicar_resumen_semanal_si_toca(context)
     await publicar_resumen_mensual_si_toca(context)
