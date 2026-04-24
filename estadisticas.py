@@ -1,6 +1,6 @@
 import logging
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from extractor import (
     detectar_linea_por_codigo,
@@ -34,6 +34,14 @@ from db import (
     db_stats_prepartido_global,
     db_buscar_pre_para_rem,
     db_stats_pre_rapido,
+    # Sistema de ligas NG1
+    db_recalcular_liga,
+    db_ligas_activas_ng1,
+    db_stats_ng1_ultimos_dias,
+    db_conteo_tiers_ng1,
+    db_ligas_con_tier_y_picks,
+    db_expirar_overrides_y_ligar,
+    db_reset_ligas_inactivas_ng1,
 )
 from config import RESUMENES_CONFIG, RACHA_MINIMA, CANAL_RACHA_ID, CANAL_PRE_ID, CANAL_PRE_GENERAL_ID, ADMIN_IDS
 
@@ -1539,3 +1547,115 @@ async def enviar_resumen_codigo_comando(update, codigo: str) -> None:
     titulo = f"RESUMEN — Código: {codigo.upper()}"
     texto  = construir_resumen(lista, titulo)
     await update.message.reply_text(texto, parse_mode="HTML")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PROCESO NOCTURNO NG1 — SISTEMA DE LIGAS
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def proceso_nocturno_ng1(context) -> None:
+    """
+    Proceso diario de mantenimiento del sistema de clasificación de ligas NG1.
+    Se ejecuta a las 05:00 UTC.
+
+    Pasos:
+      1. Expirar overrides caducados y recalcular las ligas afectadas.
+      2. Recalcular todas las ligas activas (con picks en últimos 90 días).
+      3. Resetear a NEUTRAL las ligas inactivas (sin picks en 90 días).
+      4. Enviar reporte al admin (DM privado).
+    """
+    logger.info("proceso_nocturno_ng1: inicio")
+    ESTRATEGIA = "NG1"
+    cambios_tier_hoy: list[str] = []  # ligas que cambiaron tier hoy
+
+    # ── 1. Expirar overrides caducados ────────────────────────────────
+    try:
+        ligas_override_expirado = db_expirar_overrides_y_ligar(ESTRATEGIA)
+        for liga in ligas_override_expirado:
+            resultado = db_recalcular_liga(ESTRATEGIA, liga)
+            if resultado and resultado.get("tier_cambio"):
+                cambios_tier_hoy.append(
+                    f"{liga}: {resultado['tier_anterior']} → {resultado['tier_nuevo']}"
+                )
+        if ligas_override_expirado:
+            logger.info(
+                "proceso_nocturno_ng1: %d overrides expirados, %d tier cambiados",
+                len(ligas_override_expirado), len(cambios_tier_hoy),
+            )
+    except Exception as e:
+        logger.error("proceso_nocturno_ng1: error en expiración de overrides: %s", e)
+
+    # ── 2. Recalcular todas las ligas activas ─────────────────────────
+    try:
+        ligas_activas = db_ligas_activas_ng1(ventana_dias=90)
+        for liga in ligas_activas:
+            resultado = db_recalcular_liga(ESTRATEGIA, liga)
+            if resultado and resultado.get("tier_cambio"):
+                entrada = f"{liga}: {resultado['tier_anterior']} → {resultado['tier_nuevo']}"
+                if entrada not in cambios_tier_hoy:
+                    cambios_tier_hoy.append(entrada)
+        logger.info(
+            "proceso_nocturno_ng1: %d ligas activas recalculadas", len(ligas_activas),
+        )
+    except Exception as e:
+        logger.error("proceso_nocturno_ng1: error en recálculo de ligas activas: %s", e)
+
+    # ── 3. Resetear ligas inactivas ───────────────────────────────────
+    try:
+        n_reset = db_reset_ligas_inactivas_ng1(ventana_dias=90)
+        if n_reset > 0:
+            logger.info("proceso_nocturno_ng1: %d ligas inactivas → NEUTRAL", n_reset)
+    except Exception as e:
+        logger.error("proceso_nocturno_ng1: error en reset de ligas inactivas: %s", e)
+        n_reset = 0
+
+    # ── 4. Reporte al admin ───────────────────────────────────────────
+    try:
+        stats_30d = db_stats_ng1_ultimos_dias(dias=30)
+        tiers     = db_conteo_tiers_ng1()
+
+        lineas = [
+            "📊 <b>REPORTE DIARIO — NG1</b>",
+            f"Últimos 30 días: <b>{stats_30d['picks']} picks</b>, "
+            f"tasa <b>{stats_30d['tasa']}%</b>",
+            "",
+            "Ligas por tier (mín 15 picks):",
+            f"  🏆 ELITE:    <b>{tiers.get('ELITE', 0)}</b>",
+            f"  ✅ SANA:     <b>{tiers.get('SANA', 0)}</b>",
+            f"  ⚖️ NEUTRAL:  <b>{tiers.get('NEUTRAL', 0)}</b>",
+            f"  ⚠️ DUDOSA:   <b>{tiers.get('DUDOSA', 0)}</b>",
+            f"  🚫 DESCARTE: <b>{tiers.get('DESCARTE', 0)}</b>",
+            "",
+            f"Cambios de tier hoy: <b>{len(cambios_tier_hoy)}</b>",
+        ]
+
+        if cambios_tier_hoy:
+            lineas.append("")
+            for cambio in cambios_tier_hoy[:10]:   # máx 10 para no saturar el mensaje
+                lineas.append(f"  • {cambio}")
+            if len(cambios_tier_hoy) > 10:
+                lineas.append(f"  … y {len(cambios_tier_hoy) - 10} más")
+
+        if n_reset > 0:
+            lineas.append("")
+            lineas.append(f"🔄 Ligas reseteadas a NEUTRAL (inactivas): {n_reset}")
+
+        texto = "\n".join(lineas)
+
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id    = admin_id,
+                    text       = texto,
+                    parse_mode = "HTML",
+                )
+            except Exception as e_msg:
+                logger.error(
+                    "proceso_nocturno_ng1: no se pudo enviar reporte a admin %d: %s",
+                    admin_id, e_msg,
+                )
+
+        logger.info("proceso_nocturno_ng1: reporte enviado a %d admins", len(ADMIN_IDS))
+
+    except Exception as e:
+        logger.error("proceso_nocturno_ng1: error generando/enviando reporte: %s", e)

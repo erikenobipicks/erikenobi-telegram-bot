@@ -40,6 +40,7 @@ from estadisticas import (
     publicar_resumenes_pre_si_toca,
     notificar_picks_pendientes_si_toca,
     notificar_picks_pendientes_retrasados,
+    proceso_nocturno_ng1,
 )
 from auto_resultado import job_auto_resultado
 
@@ -268,6 +269,17 @@ def main() -> None:
         interval = 60 * 60,
         first    = 180,
         name     = "auto_resultado",
+    )
+
+    # Proceso nocturno NG1 — clasificación dinámica de ligas
+    # 05:00 UTC: expira overrides, recalcula tiers, resetea inactivas, reporte al admin.
+    async def job_proceso_nocturno_ng1(ctx):
+        await proceso_nocturno_ng1(ctx)
+
+    app.job_queue.run_daily(
+        callback = job_proceso_nocturno_ng1,
+        time     = datetime.time(5, 0, tzinfo=datetime.timezone.utc),
+        name     = "proceso_nocturno_ng1",
     )
 
     logger.info("Bot iniciado — escuchando mensajes nuevos y editados.")
