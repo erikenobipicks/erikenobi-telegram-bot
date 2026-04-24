@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 from psycopg.rows import dict_row
@@ -743,6 +744,462 @@ def db_racha_miss_actual(tipo_pick: str) -> int:
         return racha
     except Exception as e:
         logger.error(f"Error calculando racha MISS para {tipo_pick}: {e}")
+        return 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SISTEMA DE LIGAS — CLASIFICACIÓN DINÁMICA (estrategia_liga_stats)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Mapa auxiliar: tier → columna de multiplicador en estrategia_config
+_TIER_MULT_COL = {
+    "ELITE":    "stake_mult_elite",
+    "SANA":     "stake_mult_sana",
+    "NEUTRAL":  "stake_mult_neutral",
+    "DUDOSA":   "stake_mult_dudosa",
+    "DESCARTE": "stake_mult_descarte",
+}
+
+# Multiplicadores hardcoded por si la config falla (fallback seguro)
+_TIER_MULT_DEFAULT = {
+    "ELITE": 1.20, "SANA": 1.00, "NEUTRAL": 1.00,
+    "DUDOSA": 0.70, "DESCARTE": 0.00,
+}
+
+
+def db_get_liga_tier(estrategia_id: str, liga: str) -> tuple[str, float]:
+    """
+    Devuelve (tier, stake_multiplier) para la liga en la estrategia dada.
+
+    - Búsqueda case-insensitive con TRIM.
+    - Si la liga no existe, inserta fila NEUTRAL y devuelve ('NEUTRAL', mult_neutral).
+    - Si la tabla no existe o hay error de DB, devuelve ('NEUTRAL', 1.00) — falla segura.
+    - El multiplicador se lee de estrategia_config; si la config no existe usa _TIER_MULT_DEFAULT.
+    """
+    if not liga:
+        return ("NEUTRAL", 1.00)
+
+    liga_norm = liga.strip()
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+
+                # ── 1. Buscar liga ─────────────────────────────────────────
+                cur.execute("""
+                    SELECT ls.tier,
+                           COALESCE(
+                               CASE ls.tier
+                                   WHEN 'ELITE'    THEN ec.stake_mult_elite
+                                   WHEN 'SANA'     THEN ec.stake_mult_sana
+                                   WHEN 'NEUTRAL'  THEN ec.stake_mult_neutral
+                                   WHEN 'DUDOSA'   THEN ec.stake_mult_dudosa
+                                   WHEN 'DESCARTE' THEN ec.stake_mult_descarte
+                                   ELSE ec.stake_mult_neutral
+                               END,
+                               1.00
+                           )::float AS stake_mult
+                    FROM estrategia_liga_stats ls
+                    LEFT JOIN estrategia_config ec
+                           ON ec.estrategia_id = ls.estrategia_id
+                    WHERE ls.estrategia_id = %s
+                      AND LOWER(TRIM(ls.liga)) = LOWER(TRIM(%s))
+                """, (estrategia_id, liga_norm))
+
+                row = cur.fetchone()
+                if row:
+                    return (row["tier"], float(row["stake_mult"]))
+
+                # ── 2. Liga nueva: obtener mult NEUTRAL de config ──────────
+                cur.execute("""
+                    SELECT stake_mult_neutral
+                    FROM estrategia_config
+                    WHERE estrategia_id = %s
+                """, (estrategia_id,))
+                cfg = cur.fetchone()
+                mult_neutral = float(cfg["stake_mult_neutral"]) if cfg else 1.00
+
+                # ── 3. Insertar fila NEUTRAL (ON CONFLICT por si hubo race) ─
+                cur.execute("""
+                    INSERT INTO estrategia_liga_stats
+                        (estrategia_id, liga, tier, ultima_actualizacion)
+                    VALUES (%s, %s, 'NEUTRAL', NOW())
+                    ON CONFLICT (estrategia_id, liga) DO NOTHING
+                """, (estrategia_id, liga_norm))
+
+                logger.info(
+                    "Liga nueva registrada como NEUTRAL | estrategia=%s | liga=%s",
+                    estrategia_id, liga_norm,
+                )
+                return ("NEUTRAL", mult_neutral)
+
+    except Exception as e:
+        logger.error(
+            "Error en db_get_liga_tier(%s, %s): %s — devuelve NEUTRAL fallback",
+            estrategia_id, liga_norm, e,
+        )
+        return ("NEUTRAL", 1.00)
+
+
+def db_recalcular_liga(estrategia_id: str, liga: str) -> dict | None:
+    """
+    Recalcula tasa_eb y tier de una liga usando picks reales de la ventana.
+
+    Reglas NO negociables (spec del briefing):
+    - Si override_manual=TRUE y override_expira > NOW(): solo actualiza stats, NO cambia tier.
+    - Rate limit: el tier no puede cambiar más de 1 vez cada 14 días.
+    - Nunca modifica estrategia_config.
+    - Si falla, loggea y devuelve None (no propaga la excepción).
+
+    Devuelve dict con resultado del recálculo o None si falla.
+    """
+    if not liga:
+        return None
+
+    liga_norm = liga.strip()
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+
+                # ── 1. Leer config de estrategia ──────────────────────────
+                cur.execute(
+                    "SELECT * FROM estrategia_config WHERE estrategia_id = %s",
+                    (estrategia_id,),
+                )
+                cfg = cur.fetchone()
+                if not cfg:
+                    logger.warning(
+                        "db_recalcular_liga: no hay config para estrategia '%s'",
+                        estrategia_id,
+                    )
+                    return None
+
+                alpha        = float(cfg["prior_alpha"])
+                beta         = float(cfg["prior_beta"])
+                ventana_dias = int(cfg["ventana_dias"])
+                min_picks    = int(cfg["min_picks_tier"])
+                min_descarte = int(cfg["min_picks_descarte"])
+                min_elite    = int(cfg["min_picks_elite"])
+                t_elite      = float(cfg["tier_elite_min"])
+                t_sana       = float(cfg["tier_sana_min"])
+                t_neutral    = float(cfg["tier_neutral_min"])
+                t_dudosa     = float(cfg["tier_dudosa_min"])
+
+                # ── 2. Contar picks y wins en la ventana ──────────────────
+                fecha_limite = datetime.now(timezone.utc) - timedelta(days=ventana_dias)
+                cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE resultado IN ('HIT','MISS')) AS picks,
+                        COUNT(*) FILTER (WHERE resultado = 'HIT')           AS wins
+                    FROM picks
+                    WHERE codigo ILIKE 'NG1%%'
+                      AND LOWER(TRIM(liga)) = LOWER(TRIM(%s))
+                      AND fecha_hora >= %s
+                      AND resultado IS NOT NULL
+                      AND resultado != 'VOID'
+                """, (liga_norm, fecha_limite))
+                stats = cur.fetchone()
+                picks = int(stats["picks"] or 0)
+                wins  = int(stats["wins"]  or 0)
+
+                # ── 3. Tasa Empirical Bayes ────────────────────────────────
+                tasa_eb = (wins + alpha) / (picks + alpha + beta)
+
+                # ── 4. Determinar tier nuevo ──────────────────────────────
+                if picks < min_picks:
+                    nuevo_tier = "NEUTRAL"
+                elif tasa_eb >= t_elite and picks >= min_elite:
+                    nuevo_tier = "ELITE"
+                elif tasa_eb >= t_sana:
+                    nuevo_tier = "SANA"
+                elif tasa_eb >= t_neutral:
+                    nuevo_tier = "NEUTRAL"
+                elif tasa_eb >= t_dudosa and picks >= min_descarte:
+                    nuevo_tier = "DUDOSA"
+                elif picks >= min_descarte:
+                    nuevo_tier = "DESCARTE"
+                else:
+                    nuevo_tier = "NEUTRAL"
+
+                # ── 5. Leer estado actual de la liga ──────────────────────
+                cur.execute("""
+                    SELECT tier, tier_anterior, fecha_cambio_tier,
+                           override_manual, override_expira
+                    FROM estrategia_liga_stats
+                    WHERE estrategia_id = %s
+                      AND LOWER(TRIM(liga)) = LOWER(TRIM(%s))
+                """, (estrategia_id, liga_norm))
+                row = cur.fetchone()
+
+                tier_actual       = (row["tier"]             if row else "NEUTRAL")
+                fecha_cambio_tier = (row["fecha_cambio_tier"] if row else None)
+                override_manual   = (row["override_manual"]   if row else False)
+                override_expira   = (row["override_expira"]   if row else None)
+
+                # ── 6. Override manual vigente: no cambiar tier ───────────
+                ahora_utc = datetime.now(timezone.utc)
+                override_activo = (
+                    override_manual
+                    and override_expira is not None
+                    and (
+                        # soporte TIMESTAMP y TIMESTAMPTZ
+                        (override_expira.tzinfo is not None and override_expira > ahora_utc)
+                        or
+                        (override_expira.tzinfo is None
+                         and override_expira > ahora_utc.replace(tzinfo=None))
+                    )
+                )
+
+                tier_cambio = False
+                if override_activo:
+                    nuevo_tier = tier_actual   # no tocar
+                elif nuevo_tier != tier_actual:
+                    # ── Rate limit 14 días ────────────────────────────────
+                    if fecha_cambio_tier is not None:
+                        fct_naive = (
+                            fecha_cambio_tier.replace(tzinfo=None)
+                            if fecha_cambio_tier.tzinfo is None
+                            else fecha_cambio_tier.astimezone(timezone.utc).replace(tzinfo=None)
+                        )
+                        dias_desde_cambio = (ahora_utc.replace(tzinfo=None) - fct_naive).days
+                        if dias_desde_cambio < 14:
+                            nuevo_tier = tier_actual   # rate limit: no cambiar aún
+                        else:
+                            tier_cambio = True
+                    else:
+                        tier_cambio = True
+
+                # ── 7. UPSERT ─────────────────────────────────────────────
+                if row:
+                    if tier_cambio:
+                        cur.execute("""
+                            UPDATE estrategia_liga_stats
+                            SET picks_90d            = %s,
+                                wins_90d             = %s,
+                                tasa_eb              = %s,
+                                tier_anterior        = tier,
+                                tier                 = %s,
+                                fecha_cambio_tier    = NOW(),
+                                ultima_actualizacion = NOW()
+                            WHERE estrategia_id = %s
+                              AND LOWER(TRIM(liga)) = LOWER(TRIM(%s))
+                        """, (picks, wins, round(tasa_eb, 4),
+                              nuevo_tier, estrategia_id, liga_norm))
+                    else:
+                        cur.execute("""
+                            UPDATE estrategia_liga_stats
+                            SET picks_90d            = %s,
+                                wins_90d             = %s,
+                                tasa_eb              = %s,
+                                ultima_actualizacion = NOW()
+                            WHERE estrategia_id = %s
+                              AND LOWER(TRIM(liga)) = LOWER(TRIM(%s))
+                        """, (picks, wins, round(tasa_eb, 4),
+                              estrategia_id, liga_norm))
+                else:
+                    # Liga no existe aún → insertar
+                    cur.execute("""
+                        INSERT INTO estrategia_liga_stats
+                            (estrategia_id, liga, picks_90d, wins_90d,
+                             tasa_eb, tier, ultima_actualizacion)
+                        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (estrategia_id, liga) DO UPDATE SET
+                            picks_90d            = EXCLUDED.picks_90d,
+                            wins_90d             = EXCLUDED.wins_90d,
+                            tasa_eb              = EXCLUDED.tasa_eb,
+                            ultima_actualizacion = NOW()
+                    """, (estrategia_id, liga_norm, picks, wins,
+                          round(tasa_eb, 4), nuevo_tier))
+
+                if tier_cambio:
+                    logger.info(
+                        "Tier cambiado | estrategia=%s | liga=%s | %s → %s | "
+                        "picks=%d wins=%d tasa_eb=%.4f",
+                        estrategia_id, liga_norm,
+                        tier_actual, nuevo_tier,
+                        picks, wins, tasa_eb,
+                    )
+
+                return {
+                    "estrategia_id": estrategia_id,
+                    "liga":          liga_norm,
+                    "picks":         picks,
+                    "wins":          wins,
+                    "tasa_eb":       round(tasa_eb, 4),
+                    "tier_anterior": tier_actual,
+                    "tier_nuevo":    nuevo_tier,
+                    "tier_cambio":   tier_cambio,
+                    "override_activo": override_activo,
+                }
+
+    except Exception as e:
+        logger.error(
+            "Error en db_recalcular_liga(%s, %s): %s",
+            estrategia_id, liga_norm, e,
+        )
+        return None
+
+
+def db_ligas_activas_ng1(ventana_dias: int = 90) -> list[str]:
+    """
+    Devuelve lista de ligas con al menos 1 pick NG1 en los últimos ventana_dias días.
+    Usada por el proceso nocturno para saber qué ligas recalcular.
+    """
+    try:
+        fecha_limite = datetime.now(timezone.utc) - timedelta(days=ventana_dias)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT TRIM(liga) AS liga
+                    FROM picks
+                    WHERE codigo ILIKE 'NG1%%'
+                      AND fecha_hora >= %s
+                      AND liga IS NOT NULL
+                      AND TRIM(liga) != ''
+                    ORDER BY 1
+                """, (fecha_limite,))
+                rows = cur.fetchall()
+        return [r["liga"] for r in rows]
+    except Exception as e:
+        logger.error("Error en db_ligas_activas_ng1: %s", e)
+        return []
+
+
+def db_stats_ng1_ultimos_dias(dias: int = 30) -> dict:
+    """
+    Estadísticas resumen de picks NG1 en los últimos N días.
+    Devuelve dict con: picks, wins, tasa.
+    """
+    try:
+        fecha_limite = datetime.now(timezone.utc) - timedelta(days=dias)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE resultado IN ('HIT','MISS')) AS picks,
+                        COUNT(*) FILTER (WHERE resultado = 'HIT')           AS wins
+                    FROM picks
+                    WHERE codigo ILIKE 'NG1%%'
+                      AND fecha_hora >= %s
+                      AND resultado IS NOT NULL
+                      AND resultado != 'VOID'
+                """, (fecha_limite,))
+                row = cur.fetchone()
+        picks = int(row["picks"] or 0)
+        wins  = int(row["wins"]  or 0)
+        tasa  = round(wins / picks * 100, 2) if picks > 0 else 0.0
+        return {"picks": picks, "wins": wins, "tasa": tasa}
+    except Exception as e:
+        logger.error("Error en db_stats_ng1_ultimos_dias: %s", e)
+        return {"picks": 0, "wins": 0, "tasa": 0.0}
+
+
+def db_conteo_tiers_ng1() -> dict[str, int]:
+    """
+    Devuelve conteo de ligas por tier para la estrategia NG1.
+    Solo ligas con picks_90d >= min_picks_tier (para excluir sin muestra).
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ls.tier, COUNT(*) AS n
+                    FROM estrategia_liga_stats ls
+                    JOIN estrategia_config ec ON ec.estrategia_id = ls.estrategia_id
+                    WHERE ls.estrategia_id = 'NG1'
+                      AND ls.picks_90d >= ec.min_picks_tier
+                    GROUP BY ls.tier
+                """)
+                rows = cur.fetchall()
+        return {r["tier"]: int(r["n"]) for r in rows}
+    except Exception as e:
+        logger.error("Error en db_conteo_tiers_ng1: %s", e)
+        return {}
+
+
+def db_ligas_con_tier_y_picks(estrategia_id: str) -> list[dict]:
+    """
+    Devuelve todas las ligas de la estrategia con sus stats actuales.
+    Usado por el proceso nocturno para detectar ligas inactivas.
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT liga, tier, picks_90d, wins_90d, tasa_eb,
+                           override_manual, override_expira, ultima_actualizacion
+                    FROM estrategia_liga_stats
+                    WHERE estrategia_id = %s
+                    ORDER BY picks_90d DESC
+                """, (estrategia_id,))
+                return cur.fetchall()
+    except Exception as e:
+        logger.error("Error en db_ligas_con_tier_y_picks: %s", e)
+        return []
+
+
+def db_expirar_overrides_y_ligar(estrategia_id: str) -> list[str]:
+    """
+    Expira overrides caducados (override_expira < NOW()) y devuelve las ligas afectadas
+    para que el llamador pueda recalcular su tier.
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE estrategia_liga_stats
+                    SET override_manual = FALSE
+                    WHERE estrategia_id = %s
+                      AND override_manual = TRUE
+                      AND override_expira < NOW()
+                    RETURNING liga
+                """, (estrategia_id,))
+                rows = cur.fetchall()
+        ligas = [r["liga"] for r in rows]
+        if ligas:
+            logger.info(
+                "Overrides expirados | estrategia=%s | ligas: %s",
+                estrategia_id, ", ".join(ligas),
+            )
+        return ligas
+    except Exception as e:
+        logger.error("Error en db_expirar_overrides_y_ligar: %s", e)
+        return []
+
+
+def db_reset_ligas_inactivas_ng1(ventana_dias: int = 90) -> int:
+    """
+    Resetea a NEUTRAL las ligas sin picks en los últimos ventana_dias días.
+    Devuelve el número de ligas reseteadas.
+    """
+    try:
+        fecha_limite = datetime.now(timezone.utc) - timedelta(days=ventana_dias)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE estrategia_liga_stats
+                    SET tier    = 'NEUTRAL',
+                        picks_90d = 0,
+                        wins_90d  = 0,
+                        ultima_actualizacion = NOW()
+                    WHERE estrategia_id = 'NG1'
+                      AND override_manual = FALSE
+                      AND liga NOT IN (
+                          SELECT DISTINCT TRIM(liga)
+                          FROM picks
+                          WHERE codigo ILIKE 'NG1%%'
+                            AND fecha_hora >= %s
+                            AND liga IS NOT NULL
+                      )
+                      AND tier != 'NEUTRAL'
+                """, (fecha_limite,))
+                n = cur.rowcount
+        if n > 0:
+            logger.info("Ligas inactivas reseteadas a NEUTRAL | n=%d", n)
+        return n
+    except Exception as e:
+        logger.error("Error en db_reset_ligas_inactivas_ng1: %s", e)
         return 0
 
 

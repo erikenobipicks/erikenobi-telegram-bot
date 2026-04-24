@@ -35,7 +35,11 @@ from formateador import construir_mensaje_base, construir_mensaje_editado
 from clasificador_alertas import clasificar_alerta
 from free import intentar_envio_free
 from utils import hoy_str, ahora_madrid, parse_percent
-from db import db_guardar_publicacion, db_pick_por_message_id, db_racha_miss_actual, db_racha_miss_ng1
+from db import (
+    db_guardar_publicacion, db_pick_por_message_id,
+    db_racha_miss_actual, db_racha_miss_ng1,
+    db_get_liga_tier, db_recalcular_liga,
+)
 from estadisticas import (
     registrar_pick_estadistica,
     actualizar_resultado_estadistica,
@@ -858,6 +862,32 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
         clasificacion["stake"],
         datos.get("partido"),
     )
+
+    # ── Multiplicador de tier de liga (solo NG1) ──────────────────────
+    # El sistema dinámico estrategia_liga_stats ajusta el stake base del
+    # clasificador: ELITE +20%, DUDOSA -30%, DESCARTE → 0 (no enviar).
+    # Si el lookup falla, se continúa con el stake original (falla segura).
+    if (datos.get("codigo") or "").upper() == "NG1":
+        try:
+            _liga_ng1   = datos.get("liga") or ""
+            _tier, _mult = db_get_liga_tier("NG1", _liga_ng1)
+            _stake_base  = clasificacion["stake"]
+            _stake_final = round(_stake_base * _mult, 1)
+            clasificacion["stake"]     = _stake_final
+            clasificacion["liga_tier"] = _tier
+            clasificacion["liga_tier_mult"] = _mult
+            logger.info(
+                "NG1 tier | liga=%s | tier=%s | mult=%.2f | stake %.1fu → %.1fu",
+                _liga_ng1, _tier, _mult, _stake_base, _stake_final,
+            )
+            if _tier == "DESCARTE" or _stake_final == 0.0:
+                logger.info(
+                    "NG1 descartado por tier DESCARTE | liga=%s | partido=%s",
+                    _liga_ng1, datos.get("partido"),
+                )
+                return
+        except Exception as _e:
+            logger.error("Error aplicando tier NG1 — se continúa sin modificar stake: %s", _e)
 
     # ── Filtro stake 0 — no apostar ───────────────────────────────────
     # Si el clasificador asigna stake=0 significa que las condiciones no

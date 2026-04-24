@@ -881,6 +881,20 @@ def _bloque_clasificacion(clasificacion: dict) -> str:
         sign = "+" if xg_diff >= 0 else ""
         lineas.append(f"🔬 xG diff: <b>{sign}{xg_diff:.2f}</b>")
 
+    # Tier de liga — solo en NG1 y cuando no es NEUTRAL (evitar ruido innecesario)
+    liga_tier = clasificacion.get("liga_tier")
+    if es_ng1 and liga_tier and liga_tier != "NEUTRAL":
+        _TIER_EMOJI = {
+            "ELITE":    "🏆",
+            "SANA":     "✅",
+            "DUDOSA":   "⚠️",
+            "DESCARTE": "🚫",
+        }
+        t_emoji = _TIER_EMOJI.get(liga_tier, "⚖️")
+        mult    = clasificacion.get("liga_tier_mult")
+        mult_txt = f" (×{mult:.2f})" if mult is not None and mult != 1.0 else ""
+        lineas.append(f"{t_emoji} Liga tier: <b>{_esc(liga_tier)}</b>{mult_txt}")
+
     # Score estadístico — solo visible cuando hay suficiente historial
     if score_info and score_info.get("confianza") in ("media", "alta"):
         sc        = score_info["score"]

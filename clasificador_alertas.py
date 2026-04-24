@@ -24,7 +24,7 @@ from extractor import (
     detectar_linea_por_codigo,
     detectar_modo_por_codigo,
 )
-from config import CUOTA_MIN_BAJO, BLACKLIST_NG1
+from config import CUOTA_MIN_BAJO
 
 logger = logging.getLogger(__name__)
 
@@ -182,11 +182,15 @@ def _calcular_doble_entrada_ng1(datos: dict, nivel_nombre: str) -> str | None:
     )
 
 
+# Mapa de nivel numérico NG1: coincide con el convenio general (3=máximo, 0=no apostar)
+_NG1_NIVEL_NUM = {"ÉLITE": 3, "ALTO": 2, "FAVORABLE": 1, "BAJO": 0}
+
+
 def _resultado_ng1(nombre: str, stake: float, razones: list[str],
                    xg_diff, datos: dict, advertencia: str | None = None) -> dict:
     info = _NG1_NIVELES[nombre]
     return {
-        "nivel":        list(_NG1_NIVELES.keys()).index(nombre),
+        "nivel":        _NG1_NIVEL_NUM.get(nombre, 1),
         "nombre":       nombre,
         "emoji":        info["emoji"],
         "stake":        stake,
@@ -209,22 +213,18 @@ def clasificar_ng1(datos: dict) -> dict:
       ÉLITE     → 1.5u  (Timer 50-58, xG diff ≥ 0.3, fuera de zona muerta, liga OK)
       ALTO      → 1.2u  (Timer 50-62, xG diff ≥ 0, liga OK)
       FAVORABLE → 1.0u  (fallback — filtros básicos InPlayGuru)
-      BAJO      → 0u    (liga blacklist o cuota en zona yield -15%)
+      BAJO      → 0u    (cuota en zona yield -15%)
+
+    El filtro de liga se aplica DESPUÉS de esta función mediante el sistema
+    dinámico de estrategia_liga_stats (multiplicador de tier por liga).
     """
     liga    = datos.get("liga")
     minuto  = datos.get("minuto") or 0
     cuota   = _cuota_over05(datos)
     xg_diff = _xg_diff_ng1(datos)
 
-    # ── DESCARTE: liga en blacklist ────────────────────────────────────
-    if _liga_en_blacklist_ng1(liga):
-        return _resultado_ng1(
-            "BAJO", 0.0,
-            [f"Liga en blacklist NG1: {liga}"],
-            xg_diff, datos,
-        )
-
     # ── DESCARTE: cuota en zona muerta (yield -15% confirmado) ────────
+    # El filtro de liga ya no es estático aquí; lo gestiona el sistema dinámico.
     if cuota is not None and _NG1_DESCARTE_CUOTA_MIN <= cuota <= _NG1_DESCARTE_CUOTA_MAX:
         return _resultado_ng1(
             "BAJO", 0.0,
