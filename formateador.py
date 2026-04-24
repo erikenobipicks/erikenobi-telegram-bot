@@ -810,6 +810,15 @@ def _construir_rem(
         lineas.append(f"💰 Cuota: <b>{cuota_txt}</b>")
     lineas.append(f"📦 Stake: <b>{stake_txt}</b>")
 
+    # Porcentaje de acierto de la estrategia (campos del alert de InPlayGuru)
+    s_alerta = datos.get("strike_alerta")
+    s_liga   = datos.get("strike_liga")
+    if s_alerta:
+        lineas.append(f"📊 Strike alerta: <b>{_esc(str(s_alerta))}%</b>")
+    if s_liga:
+        s_liga_txt = str(s_liga) if str(s_liga).upper() in ("N/A", "0") else f"{s_liga}%"
+        lineas.append(f"📈 Strike liga: <b>{_esc(s_liga_txt)}</b>")
+
     if sistema_legible:
         lineas.append(f"📋 Sistema: <b>{_esc(sistema_legible)}</b>")
 
