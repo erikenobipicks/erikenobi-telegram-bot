@@ -610,6 +610,15 @@ def _construir_live(datos: dict, tipo_pick: str, para_free: bool) -> str:
         s_liga_txt = s_liga if str(s_liga).upper() == "N/A" else f"{s_liga}%"
         lineas.append(f"📈 Strike liga: <b>{s_liga_txt}</b>")
 
+    # xG — solo para picks NG1 (Next Goal) cuando el dato está disponible
+    if (datos.get("codigo") or "").upper() == "NG1":
+        xg_home = datos.get("xg_home")
+        xg_away = datos.get("xg_away")
+        if xg_home is not None and xg_away is not None:
+            xg_diff = round(float(xg_home) - float(xg_away), 2)
+            sign    = "+" if xg_diff >= 0 else ""
+            lineas.append(f"🔬 xG: {xg_home:.2f} - {xg_away:.2f}  (diff {sign}{xg_diff:.2f})")
+
     # Modelo al final
     if datos.get("codigo"):
         lineas.append(f"📦 Modelo: <b>{_esc(_limpiar_prefijo_visual(datos['codigo']))}</b>")
@@ -853,11 +862,24 @@ def _bloque_clasificacion(clasificacion: dict) -> str:
     if adv:
         linea_stake += f"\n⚠️ <i>{adv}</i>"
 
+    # NG1: etiqueta de nivel específica ("NG1 — ÉLITE" en vez de "ÉLITE — Nivel 3/3")
+    es_ng1 = clasificacion.get("es_ng1", False)
+    if es_ng1:
+        cabecera_nivel = f"{emoji} <b>NG1 — {nom}</b>"
+    else:
+        cabecera_nivel = f"{emoji} <b>{nom}</b> — Nivel {nivel}/3"
+
     lineas = [
-        f"{emoji} <b>{nom}</b> — Nivel {nivel}/3",
+        cabecera_nivel,
         sep,
         linea_stake,
     ]
+
+    # xG diff — solo en NG1 y cuando está disponible
+    xg_diff = clasificacion.get("xg_diff")
+    if es_ng1 and xg_diff is not None:
+        sign = "+" if xg_diff >= 0 else ""
+        lineas.append(f"🔬 xG diff: <b>{sign}{xg_diff:.2f}</b>")
 
     # Score estadístico — solo visible cuando hay suficiente historial
     if score_info and score_info.get("confianza") in ("media", "alta"):
@@ -867,6 +889,12 @@ def _bloque_clasificacion(clasificacion: dict) -> str:
         lineas.append(f"{sc_emoji} Score histórico: <b>{sc}/100</b> <i>({confianza})</i>")
 
     lineas.append(sep)
+
+    # Sugerencia doble entrada NG1 — va después del separador, antes del cuerpo del pick
+    doble = clasificacion.get("doble_entrada")
+    if doble:
+        lineas.append(_esc(doble))
+
     return "\n".join(lineas)
 
 

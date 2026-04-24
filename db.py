@@ -686,6 +686,36 @@ def db_calcular_racha_actual(tipo_pick: str | None = None) -> int:
         return 0
 
 
+def db_racha_miss_ng1() -> int:
+    """
+    Cuenta los MISS consecutivos más recientes específicamente para picks NG1.
+    Se filtra por codigo='NG1' (no por tipo_pick) para aislar la racha de esta estrategia.
+    Los VOIDs se ignoran.
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT resultado FROM picks
+                    WHERE resultado IS NOT NULL
+                      AND resultado != 'VOID'
+                      AND codigo = 'NG1'
+                    ORDER BY fecha_hora DESC
+                    LIMIT 20;
+                """)
+                rows = cur.fetchall()
+        racha = 0
+        for row in rows:
+            if row["resultado"] == "MISS":
+                racha += 1
+            else:
+                break
+        return racha
+    except Exception as e:
+        logger.error(f"Error calculando racha MISS para NG1: {e}")
+        return 0
+
+
 def db_racha_miss_actual(tipo_pick: str) -> int:
     """
     Cuenta los MISS consecutivos más recientes para tipo_pick.

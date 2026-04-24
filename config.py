@@ -52,6 +52,30 @@ FILTRO_STRIKE_LIGA = {
 }
 
 # ==============================
+# NG1 — BLACKLIST DE LIGAS
+# ==============================
+#
+# Ligas con muestra ≥15 picks y tasa histórica < 78%.
+# Las comparaciones se hacen en minúsculas sobre el nombre completo de liga.
+
+BLACKLIST_NG1 = [
+    "spain segunda",
+    "france ligue 1",
+    "mexico liga mx",
+    "chile liga de primera",
+    "australia a-league",
+    "belgium first division b",
+    "germany bundesliga women",
+    "austria bundesliga",
+]
+
+# NG1 — RACHA DE FALLOS ESPECÍFICA
+# El histórico nunca registró 4 MISS consecutivos; si ocurre, pausa 2h.
+
+NG1_RACHA_MISS_LIMITE = 4    # umbral de MISS consecutivos (umbral > general)
+NG1_RACHA_PAUSA_MIN   = 120  # minutos de pausa (2 horas)
+
+# ==============================
 # RACHA DE ROJOS — PAUSA AUTOMÁTICA
 # ==============================
 #

@@ -24,7 +24,7 @@ from extractor import (
     detectar_linea_por_codigo,
     detectar_modo_por_codigo,
 )
-from config import CUOTA_MIN_BAJO
+from config import CUOTA_MIN_BAJO, BLACKLIST_NG1
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,215 @@ _FAV_CORNER_SL_MIN = 75  # strike_liga mínimo para que un corner ignore el lím
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# NG1 — CLASIFICADOR ESPECÍFICO
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Umbrales NG1
+_NG1_ELITE_MIN_MIN        = 50
+_NG1_ELITE_MIN_MAX        = 58
+_NG1_ELITE_XG_MIN         = 0.3
+_NG1_ELITE_CUOTA_EXCL_MIN = 1.25   # rango de cuota excluido en ÉLITE (yield negativo)
+_NG1_ELITE_CUOTA_EXCL_MAX = 1.35
+
+_NG1_ALTO_MIN_MIN  = 50
+_NG1_ALTO_MIN_MAX  = 62
+_NG1_ALTO_XG_MIN   = 0.0
+
+_NG1_DESCARTE_CUOTA_MIN = 1.25    # rango de cuota → yield -15% confirmado
+_NG1_DESCARTE_CUOTA_MAX = 1.35
+
+_NG1_DOBLE_CUOTA_MIN = 1.38       # cuota +0.5 mínima para sugerir doble entrada
+_NG1_DOBLE_CUOTA_MAX = 1.45       # cuota +0.5 máxima para sugerir doble entrada
+
+# Win rates históricos NG1 (807 picks, 197 días)
+_NG1_NIVELES = {
+    "ÉLITE":     {"emoji": "🔵", "wr": 86.31, "n": 807},
+    "ALTO":      {"emoji": "🟢", "wr": 86.31, "n": 807},
+    "FAVORABLE": {"emoji": "🟡", "wr": 83.98, "n": 807},
+    "BAJO":      {"emoji": "🔴", "wr": 81.29, "n": 807},
+}
+
+
+def _es_ng1(datos: dict) -> bool:
+    return (datos.get("codigo") or "").upper() == "NG1"
+
+
+def _liga_en_blacklist_ng1(liga: str | None) -> bool:
+    if not liga:
+        return False
+    liga_lower = liga.lower()
+    return any(bl in liga_lower for bl in BLACKLIST_NG1)
+
+
+def _xg_diff_ng1(datos: dict) -> float | None:
+    """Devuelve xG_home - xG_away o None si no hay datos."""
+    xg_home = datos.get("xg_home")
+    xg_away = datos.get("xg_away")
+    if xg_home is not None and xg_away is not None:
+        return round(float(xg_home) - float(xg_away), 3)
+    return None
+
+
+def _cuota_over05(datos: dict) -> float | None:
+    """Extrae la cuota del mercado Over 0.5 (línea +0.5 asiática en NG1)."""
+    raw = datos.get("odds_over_0_5")
+    if not raw:
+        return None
+    try:
+        partes = re.split(r"[\s|]+", str(raw).strip())
+        return float(partes[0].replace(",", ".")) if partes else None
+    except (ValueError, IndexError):
+        return None
+
+
+def _cuota_over15(datos: dict) -> float | None:
+    """Extrae la cuota del mercado Over 1.5 (proxy de línea +1 asiática en NG1)."""
+    raw = datos.get("odds_over_1_5")
+    if not raw:
+        return None
+    try:
+        partes = re.split(r"[\s|]+", str(raw).strip())
+        return float(partes[0].replace(",", ".")) if partes else None
+    except (ValueError, IndexError):
+        return None
+
+
+def _score_empatado_ng1(datos: dict) -> bool:
+    """True si el marcador actual es 1-1 o 2-2 (mayor probabilidad de gol extra)."""
+    goles_raw = datos.get("goles") or ""
+    partes = [p.strip() for p in goles_raw.replace("-", " ").split() if p.strip().isdigit()]
+    if len(partes) >= 2:
+        try:
+            loc, vis = int(partes[0]), int(partes[1])
+            return loc == vis and loc in (1, 2)
+        except ValueError:
+            pass
+    return False
+
+
+def _calcular_doble_entrada_ng1(datos: dict, nivel_nombre: str) -> str | None:
+    """
+    Devuelve el texto de sugerencia de doble entrada o None.
+    Solo aplica en ÉLITE/ALTO + cuota_05 en [1.38, 1.45) + marcador 1-1 ó 2-2.
+    """
+    if nivel_nombre not in ("ÉLITE", "ALTO"):
+        return None
+
+    cuota_05 = _cuota_over05(datos)
+    if cuota_05 is None:
+        return None
+
+    if cuota_05 < _NG1_DOBLE_CUOTA_MIN:
+        # Cuota baja → solo línea +1 (no recomendar doble)
+        return None
+    if cuota_05 >= _NG1_DOBLE_CUOTA_MAX:
+        # Cuota alta → solo +0.5 paga más (no recomendar doble)
+        return None
+
+    if not _score_empatado_ng1(datos):
+        return None
+
+    cuota_1   = _cuota_over15(datos)
+    cuota_1_txt  = f"{cuota_1:.2f}" if cuota_1 else "?"
+    cuota_05_txt = f"{cuota_05:.2f}"
+
+    return (
+        f"💡 Sugerencia: Doble entrada posible\n"
+        f"    - Línea +1 a {cuota_1_txt}: 0.7u\n"
+        f"    - Línea +0.5 a {cuota_05_txt}: 0.7u"
+    )
+
+
+def _resultado_ng1(nombre: str, stake: float, razones: list[str],
+                   xg_diff, datos: dict, advertencia: str | None = None) -> dict:
+    info = _NG1_NIVELES[nombre]
+    return {
+        "nivel":        list(_NG1_NIVELES.keys()).index(nombre),
+        "nombre":       nombre,
+        "emoji":        info["emoji"],
+        "stake":        stake,
+        "razones":      razones,
+        "wr":           info["wr"],
+        "n":            info["n"],
+        "advertencia":  advertencia,
+        "xg_diff":      xg_diff,
+        "doble_entrada": _calcular_doble_entrada_ng1(datos, nombre),
+        "score_info":   None,
+        "es_ng1":       True,
+    }
+
+
+def clasificar_ng1(datos: dict) -> dict:
+    """
+    Clasificador override para picks NG1 (Next Goal, Over 0.5 desde la alerta).
+
+    Niveles:
+      ÉLITE     → 1.5u  (Timer 50-58, xG diff ≥ 0.3, fuera de zona muerta, liga OK)
+      ALTO      → 1.2u  (Timer 50-62, xG diff ≥ 0, liga OK)
+      FAVORABLE → 1.0u  (fallback — filtros básicos InPlayGuru)
+      BAJO      → 0u    (liga blacklist o cuota en zona yield -15%)
+    """
+    liga    = datos.get("liga")
+    minuto  = datos.get("minuto") or 0
+    cuota   = _cuota_over05(datos)
+    xg_diff = _xg_diff_ng1(datos)
+
+    # ── DESCARTE: liga en blacklist ────────────────────────────────────
+    if _liga_en_blacklist_ng1(liga):
+        return _resultado_ng1(
+            "BAJO", 0.0,
+            [f"Liga en blacklist NG1: {liga}"],
+            xg_diff, datos,
+        )
+
+    # ── DESCARTE: cuota en zona muerta (yield -15% confirmado) ────────
+    if cuota is not None and _NG1_DESCARTE_CUOTA_MIN <= cuota <= _NG1_DESCARTE_CUOTA_MAX:
+        return _resultado_ng1(
+            "BAJO", 0.0,
+            [f"Cuota Over 0.5 ({cuota}) en zona de yield negativo "
+             f"({_NG1_DESCARTE_CUOTA_MIN}-{_NG1_DESCARTE_CUOTA_MAX})"],
+            xg_diff, datos,
+            advertencia="yield -15% confirmado en esta franja de cuotas",
+        )
+
+    # ── ÉLITE ─────────────────────────────────────────────────────────
+    cuota_fuera_zona = cuota is None or not (_NG1_ELITE_CUOTA_EXCL_MIN <= cuota <= _NG1_ELITE_CUOTA_EXCL_MAX)
+    if (
+        _NG1_ELITE_MIN_MIN <= minuto <= _NG1_ELITE_MIN_MAX
+        and xg_diff is not None and xg_diff >= _NG1_ELITE_XG_MIN
+        and cuota_fuera_zona
+    ):
+        razones = [
+            f"Timer {minuto}' (rango {_NG1_ELITE_MIN_MIN}-{_NG1_ELITE_MIN_MAX}')",
+            f"xG diff: +{xg_diff:.2f} (Home favorito ≥ {_NG1_ELITE_XG_MIN})",
+        ]
+        if cuota:
+            razones.append(f"Cuota {cuota:.2f} fuera de zona muerta")
+        return _resultado_ng1("ÉLITE", 1.5, razones, xg_diff, datos)
+
+    # ── ALTO ──────────────────────────────────────────────────────────
+    if (
+        _NG1_ALTO_MIN_MIN <= minuto <= _NG1_ALTO_MIN_MAX
+        and xg_diff is not None and xg_diff >= _NG1_ALTO_XG_MIN
+    ):
+        razones = [
+            f"Timer {minuto}' (rango {_NG1_ALTO_MIN_MIN}-{_NG1_ALTO_MIN_MAX}')",
+            f"xG diff: {xg_diff:+.2f}",
+        ]
+        return _resultado_ng1("ALTO", 1.2, razones, xg_diff, datos)
+
+    # ── FAVORABLE (fallback) ──────────────────────────────────────────
+    razones_fav = ["Filtros básicos InPlayGuru"]
+    if xg_diff is None:
+        razones_fav.append("Sin dato xG disponible")
+    elif minuto < _NG1_ALTO_MIN_MIN or minuto > _NG1_ALTO_MIN_MAX:
+        razones_fav.append(f"Timer {minuto}' fuera del rango óptimo ({_NG1_ALTO_MIN_MIN}-{_NG1_ALTO_MIN_MAX}')")
+    elif xg_diff < _NG1_ALTO_XG_MIN:
+        razones_fav.append(f"xG diff {xg_diff:+.2f} por debajo del umbral")
+    return _resultado_ng1("FAVORABLE", 1.0, razones_fav, xg_diff, datos)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # API pública
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -78,7 +287,13 @@ def clasificar_alerta(datos: dict, tipo_pick: str) -> dict:
         n           int         tamaño de muestra
         advertencia str | None  aviso adicional
         score_info  dict | None resultado del motor estadístico interno
+
+    Para picks NG1 se usa el clasificador específico (sin score estadístico).
     """
+    # ── NG1: clasificador override ────────────────────────────────────
+    if _es_ng1(datos):
+        return clasificar_ng1(datos)
+
     resultado = _clasificar_base(datos, tipo_pick)
 
     # ── Motor estadístico interno ─────────────────────────────────────

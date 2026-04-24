@@ -50,6 +50,9 @@ def extraer_datos(texto: str) -> dict:
         "kickoff": None,
         "sistema": None,   # etiqueta libre en partes[6] de alertas PRE/REM (ej: "CARLOS_MOLLAR")
         "stk5":    False,  # True si partes[7] == "STK5" — pick prioritario stake alto
+        # xG (expected goals) — extraído del campo "xG: X.XX-X.XX" de la alerta
+        "xg_home": None,   # xG equipo local (float)
+        "xg_away": None,   # xG equipo visitante (float)
     }
 
     lineas = [line.strip() for line in texto.splitlines() if line.strip()]
@@ -183,6 +186,18 @@ def extraer_datos(texto: str) -> dict:
         m = re.search(patron, texto, re.IGNORECASE)
         if m:
             datos[campo] = m.group(1).strip()
+
+    # xG — acepta "xG: 1.23-0.45", "xGoals: 1.23 - 0.45", "xG Home: 1.23 Away: 0.45"
+    _xg = re.search(
+        r"xG(?:oals)?[:\s]+([0-9]+(?:[.,][0-9]+)?)\s*[-–]\s*([0-9]+(?:[.,][0-9]+)?)",
+        texto, re.IGNORECASE,
+    )
+    if _xg:
+        try:
+            datos["xg_home"] = round(float(_xg.group(1).replace(",", ".")), 3)
+            datos["xg_away"] = round(float(_xg.group(2).replace(",", ".")), 3)
+        except ValueError:
+            pass
 
     # Odds 1X2 (el valor está en la línea siguiente al label)
     m = re.search(r"1X2 Pre-Match Odds:\s*\n([^\n]+)", texto, re.IGNORECASE)

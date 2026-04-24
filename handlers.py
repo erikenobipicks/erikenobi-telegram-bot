@@ -18,6 +18,7 @@ from config import (
     FINDE_CORNER_HORA_INICIO, FINDE_CORNER_HORA_FIN, FINDE_CORNER_STRIKE_MIN,
     RACHA_MISS_LIMITE, RACHA_MISS_PAUSA_MIN,
     RAFAGA_PICKS_LIMITE, RAFAGA_VENTANA_MIN, RAFAGA_PAUSA_MIN,
+    NG1_RACHA_MISS_LIMITE, NG1_RACHA_PAUSA_MIN,
 )
 from state import STATE, save_state
 from extractor import (
@@ -34,7 +35,7 @@ from formateador import construir_mensaje_base, construir_mensaje_editado
 from clasificador_alertas import clasificar_alerta
 from free import intentar_envio_free
 from utils import hoy_str, ahora_madrid, parse_percent
-from db import db_guardar_publicacion, db_pick_por_message_id, db_racha_miss_actual
+from db import db_guardar_publicacion, db_pick_por_message_id, db_racha_miss_actual, db_racha_miss_ng1
 from estadisticas import (
     registrar_pick_estadistica,
     actualizar_resultado_estadistica,
@@ -298,6 +299,40 @@ def _verificar_racha_miss(tipo_pick: str) -> None:
             "RACHA MISS | tipo: %s | %d MISS consecutivos → pausa %d min",
             tipo_pick, racha, RACHA_MISS_PAUSA_MIN,
         )
+
+
+def _verificar_racha_miss_ng1() -> None:
+    """
+    Racha específica para NG1: umbral más alto (4 MISS) y pausa más larga (2h).
+    Activa una pausa bajo la clave virtual 'ng1' en pausas['racha_miss'].
+    El histórico nunca alcanzó 4 MISS consecutivos; si ocurre, es señal de anomalía.
+    """
+    try:
+        racha = db_racha_miss_ng1()
+    except Exception as e:
+        logger.error("Error consultando racha MISS NG1: %s", e)
+        return
+
+    if racha >= NG1_RACHA_MISS_LIMITE:
+        _activar_pausa("ng1", "racha_miss", NG1_RACHA_PAUSA_MIN)
+        logger.warning(
+            "RACHA MISS NG1 | %d MISS consecutivos (nunca histórico) → pausa %d min",
+            racha, NG1_RACHA_PAUSA_MIN,
+        )
+
+
+def _obtener_pausa_ng1() -> dict | None:
+    """
+    Devuelve info de la pausa NG1-específica si está activa, None si no.
+    La pausa se almacena bajo la clave virtual 'ng1' en pausas['racha_miss'].
+    """
+    ahora_ts = datetime.now(timezone.utc).timestamp()
+    pausas   = STATE.setdefault("pausas", {"racha_miss": {}, "rafaga": {}})
+    fin      = pausas.get("racha_miss", {}).get("ng1")
+    if isinstance(fin, float) and fin > ahora_ts:
+        minutos_restantes = max(1, round((fin - ahora_ts) / 60))
+        return {"motivo": "racha_miss_ng1", "hasta": fin, "minutos_restantes": minutos_restantes}
+    return None
 
 
 # ── Límite de tamaño del STATE ────────────────────────────────────────────────
@@ -779,6 +814,17 @@ async def procesar_nuevo_mensaje(mensaje, context: ContextTypes.DEFAULT_TYPE) ->
 
     # ── Comprobación de pausas activas (racha MISS o ráfaga) ─────────
     # Las pausas solo aplican a picks LIVE; los prepartidos no se ven afectados.
+
+    # Pausa específica NG1 (4 MISS → 2h) — se comprueba antes de la general
+    if (datos.get("codigo") or "").upper() == "NG1":
+        pausa_ng1 = _obtener_pausa_ng1()
+        if pausa_ng1:
+            logger.info(
+                "Pick NG1 bloqueado por pausa racha NG1 | %d min restantes | partido: %s",
+                pausa_ng1["minutos_restantes"], datos.get("partido"),
+            )
+            return
+
     pausa = _obtener_pausa_activa(tipo_pick)
     if pausa:
         logger.info(
@@ -1010,6 +1056,9 @@ async def procesar_mensaje_editado(mensaje, context: ContextTypes.DEFAULT_TYPE) 
     # Comprobar racha de MISS y activar pausa si es necesario
     if resultado_actual == "MISS":
         _verificar_racha_miss(tipo_pick)
+        # Racha específica NG1: umbral 4 MISS → pausa 2h
+        if (datos.get("codigo") or "").upper() == "NG1":
+            _verificar_racha_miss_ng1()
 
     await publicar_resumen_diario_si_toca(context)
     await publicar_resumen_semanal_si_toca(context)
