@@ -515,6 +515,17 @@ async def _publicar_cm_rem(
     except Exception as e:
         logger.error("Error enviando CM-REM a %s: %s", CANAL_PRE_ID, e)
 
+    # STK5 → replicar también al canal prepartido general (Over 2.5)
+    if datos.get("stk5"):
+        try:
+            enviado_gen = await enviar_mensaje(context, CANAL_PRE_GENERAL_ID, mensaje_rem)
+            destinos_publicados[str(CANAL_PRE_GENERAL_ID)] = enviado_gen.message_id
+            logger.info(
+                "CM-REM STK5 replicado a %s (msg %s)", CANAL_PRE_GENERAL_ID, enviado_gen.message_id,
+            )
+        except Exception as e:
+            logger.error("Error replicando CM-REM STK5 a %s: %s", CANAL_PRE_GENERAL_ID, e)
+
     if destinos_publicados:
         _registrar_alerta_reciente(datos, tipo_pick)
         # Registrar el REM en DB como pick de análisis del canal CM.
@@ -564,6 +575,17 @@ async def _publicar_cm_pre(
         logger.info("CM-PRE enviado a %s (msg %s)", CANAL_PRE_ID, enviado.message_id)
     except Exception as e:
         logger.error("Error enviando CM-PRE a %s: %s", CANAL_PRE_ID, e)
+
+    # STK5 → replicar también al canal prepartido general (Over 2.5)
+    if datos.get("stk5"):
+        try:
+            enviado_gen = await enviar_mensaje(context, CANAL_PRE_GENERAL_ID, mensaje_pre)
+            destinos_publicados[str(CANAL_PRE_GENERAL_ID)] = enviado_gen.message_id
+            logger.info(
+                "CM-PRE STK5 replicado a %s (msg %s)", CANAL_PRE_GENERAL_ID, enviado_gen.message_id,
+            )
+        except Exception as e:
+            logger.error("Error replicando CM-PRE STK5 a %s: %s", CANAL_PRE_GENERAL_ID, e)
 
     if destinos_publicados:
         _registrar_alerta_reciente(datos, tipo_pick)
